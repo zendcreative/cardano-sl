@@ -323,6 +323,8 @@ runDiffusionLayerFull networkConfig ourVerInfo oq slotDuration listeners action 
         return ((>>= either throwM return) <$> itMap)
     subscriptionThread nc sactions = case topologySubscriptionWorker (ncTopology nc) of
         Just (SubscriptionWorkerBehindNAT dnsDomains) -> do
+            -- TODO wire this timer up so that we can reset it when a new block
+            -- arrives.
             timer <- newDynamicTimer (convertUnit <$> slotDuration)
             dnsSubscriptionWorker (OQ.updatePeersBucket oq) networkConfig dnsDomains timer sactions
         Just (SubscriptionWorkerKademlia kinst nodeType valency fallbacks) ->

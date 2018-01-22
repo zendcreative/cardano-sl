@@ -79,6 +79,7 @@ dnsSubscriptionWorker updatePeersBucket networkCfg DnsDomains{..} keepAliveTimer
         -- Try to subscribe to some peer.
         -- If they all fail, wait a while before trying again.
         subscribeToOne dnsPeersList
+        -- TODO we shouldn't need to wait (3 * slotDuration)
         dtDuration keepAliveTimer >>= delay
         subscribeAlts dnsPeersVar (index, alts)
 
