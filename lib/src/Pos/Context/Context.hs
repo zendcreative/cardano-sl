@@ -113,9 +113,9 @@ data NodeContext = NodeContext
     , ncConnectedPeers             :: !ConnectedPeers
     -- ^ Set of peers that we're connected to.
     , ncNetworkConfig              :: !(NetworkConfig KademliaDHTInstance)
+    , ncSubscriptionKeepAliveTimer :: !Timer
     -- ^ Timer for delaying sending keep-alive like packets to relay nodes until
     -- a specific duration after the last time a block was received has passed.
-    , ncSubscriptionKeepAliveTimer :: !Timer
     , ncMisbehaviorMetrics :: Maybe MisbehaviorMetrics
     }
 
