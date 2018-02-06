@@ -1,6 +1,6 @@
 {-# LANGUAGE RankNTypes #-}
 
-module Test.Pos.Helpers
+module Test.Pos.GeneratorHelpers
        ( blockPropertySpec
        ) where
 

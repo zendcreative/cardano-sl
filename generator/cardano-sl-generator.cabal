@@ -19,12 +19,6 @@ library
                        Pos.Generator.BlockEvent
                        Pos.Generator.BlockEvent.DSL
 
-                       -- Common code for tests
-                       Test.Pos.Block.Logic.Mode
-                       Test.Pos.Block.Logic.Emulation
-                       Test.Pos.Block.Logic.Util
-                       Test.Pos.Block.Logic.Event
-
   other-modules:
                        Pos.Generator.Block.Error
                        Pos.Generator.Block.Logic
@@ -109,7 +103,7 @@ test-suite cardano-generator-test
   main-is:             Test.hs
   other-modules:
                        Spec
-                       Test.Pos.Helpers
+                       Test.Pos.GeneratorHelpers
 
                        Test.Pos.Lrc.WorkerSpec
                        Test.Pos.Block.Logic.CreationSpec
@@ -129,6 +123,7 @@ test-suite cardano-generator-test
                      , cardano-sl-delegation
                      , cardano-sl-generator
                      , cardano-sl-ssc
+                     , cardano-sl-testlib
                      , cardano-sl-txp
                      , cardano-sl-update
                      , cardano-sl-util

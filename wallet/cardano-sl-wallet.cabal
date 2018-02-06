@@ -364,6 +364,7 @@ test-suite cardano-wallet-test
                      , cardano-sl-lrc
                      , cardano-sl-networking
                      , cardano-sl-ssc
+                     , cardano-sl-testlib
                      , cardano-sl-txp
                      , cardano-sl-update
                      , cardano-sl-util

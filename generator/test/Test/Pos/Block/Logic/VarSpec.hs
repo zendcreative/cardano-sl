@@ -46,7 +46,7 @@ import           Test.Pos.Block.Logic.Util (EnableTxPayload (..), InplaceDB (..)
                                             bpGenBlocks, bpGoToArbitraryState, getAllSecrets,
                                             satisfySlotCheck)
 import           Test.Pos.Configuration (HasStaticConfigurations, withStaticConfigurations)
-import           Test.Pos.Helpers (blockPropertySpec)
+import           Test.Pos.GeneratorHelpers (blockPropertySpec)
 
 
 -- stack test cardano-sl --fast --test-arguments "-m Test.Pos.Block.Logic.Var"

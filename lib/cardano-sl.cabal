@@ -93,7 +93,6 @@ library
                         Pos.Binary.Communication
 
                         -- Exposed for tests
-                        Test.Pos.Helpers
                         Test.Pos.Cbor.Canonicity
                         Test.Pos.Cbor.RefImpl
 
@@ -330,6 +329,7 @@ test-suite cardano-test
                      , cardano-sl-lrc
                      , cardano-sl-networking
                      , cardano-sl-ssc
+                     , cardano-sl-testlib
                      , cardano-sl-txp
                      , cardano-sl-update
                      , cardano-sl-util

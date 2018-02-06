@@ -33,6 +33,7 @@ packages:
 - tools
 - wallet
 - wallet-new # The new (unreleased) version of the wallet
+- testlib
 
 - location:
     git: https://github.com/well-typed/cborg
@@ -183,3 +184,4 @@ ghc-options:
   cardano-sl-wallet:     -Werror
   cardano-sl-explorer:   -Werror
   cardano-sl-node:       -Werror
+  cardano-sl-testlib:    -Werror
