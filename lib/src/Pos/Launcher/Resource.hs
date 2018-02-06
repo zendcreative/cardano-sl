@@ -23,7 +23,6 @@ import           Universum
 import           Control.Concurrent.STM (newEmptyTMVarIO, newTBQueueIO)
 import           Data.Default (Default)
 import qualified Data.Time as Time
-import           Data.Time.Units (Microsecond, convertUnit)
 import           Formatting (sformat, shown, (%))
 import           Mockable (Production (..))
 import           System.IO (BufferMode (..), Handle, hClose, hSetBuffering)
@@ -37,7 +36,7 @@ import           Pos.Block.Slog (mkSlogContext)
 import           Pos.Client.CLI.Util (readLoggerConfig)
 import           Pos.Configuration
 import           Pos.Context (ConnectedPeers (..), NodeContext (..), StartTime (..))
-import           Pos.Core (BlockVersionData(bvdSlotDuration), GenesisData(gdBlockVersionData), HasConfiguration, Timestamp, gdStartTime, genesisData)
+import           Pos.Core (HasConfiguration, Timestamp, gdStartTime, genesisData)
 import           Pos.DB (MonadDBRead, NodeDBs)
 import           Pos.DB.Rocks (closeNodeDBs, openNodeDBs)
 import           Pos.Delegation (DelegationVar, HasDlgConfiguration, mkDelegationVar)
@@ -59,7 +58,7 @@ import           Pos.Txp (GenericTxpLocalData (..), TxpGlobalSettings, mkTxpLoca
 import           Pos.Launcher.Mode (InitMode, InitModeContext (..), runInitMode)
 import           Pos.Update.Context (mkUpdateContext)
 import qualified Pos.Update.DB as GState
-import           Pos.Util (bracketWithLogging, newInitFuture, newTimer)
+import           Pos.Util (bracketWithLogging, newInitFuture)
 
 #ifdef linux_HOST_OS
 import qualified System.Systemd.Daemon as Systemd
@@ -293,9 +292,6 @@ allocateNodeContext ancd txpSettings ekgStore = do
     -- TODO synchronize the NodeContext peers var with whatever system
     -- populates it.
     peersVar <- newTVarIO mempty
-    let slotDuration :: Microsecond
-        slotDuration = convertUnit . bvdSlotDuration $ gdBlockVersionData genesisData
-    ncSubscriptionKeepAliveTimer <- newTimer $ 3 * slotDuration
     logDebug "Created peersVar"
     mm <- initializeMisbehaviorMetrics ekgStore
 
