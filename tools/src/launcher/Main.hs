@@ -37,7 +37,7 @@ import           Options.Applicative (Parser, ParserInfo, ParserResult (..), def
                                       progDesc, renderFailure, short, strOption)
 import           Serokell.Aeson.Options (defaultOptions)
 import           System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
-import           System.Environment (getEnv, getExecutablePath, getProgName)
+import           System.Environment (getEnv, getExecutablePath, getProgName, setEnv)
 import           System.Exit (ExitCode (..))
 import           System.FilePath (takeDirectory, (</>))
 import qualified System.IO as IO
@@ -332,6 +332,9 @@ main =
             Just wpath -> do
                 logNotice "LAUNCHER STARTED"
                 logInfo "Running in the client scenario"
+                case loReportServer of
+                  Nothing -> pure ()
+                  Just url -> liftIO $ setEnv "REPORT_URL" url
                 clientScenario
                     (NodeDbPath loNodeDbPath)
                     loNodeLogConfig
