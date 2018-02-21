@@ -19,7 +19,7 @@ import           System.Wlog (WithLogger, askLoggerName, logDebug, logInfo, logW
 
 import           Pos.Communication (OutSpecs)
 import           Pos.Communication.Util (ActionSpec (..), wrapActionSpec)
-import           Pos.Context (getOurPublicKey)
+import           Pos.Context (getOurPublicKey, ncSlottingContext)
 import           Pos.Core (GenesisData (gdBootStakeholders, gdHeavyDelegation),
                            GenesisDelegation (..), GenesisWStakeholders (..), addressHash,
                            gdFtsSeed, genesisData)
@@ -29,7 +29,7 @@ import qualified Pos.GState as GS
 import           Pos.Launcher.Resource (NodeResources (..))
 import           Pos.NtpCheck (NtpStatus (..), ntpSettings, withNtpCheck)
 import           Pos.Reporting (reportError)
-import           Pos.Slotting (waitSystemStart)
+import           Pos.Slotting (SlottingContextSum (..), waitSystemStart)
 import           Pos.Txp (bootDustThreshold)
 import           Pos.Update.Configuration (HasUpdateConfiguration, curSoftwareVersion,
                                            lastKnownBlockVersion, ourSystemTag)
@@ -50,7 +50,7 @@ runNode'
     -> [WorkerSpec m]
     -> [WorkerSpec m]
     -> WorkerSpec m
-runNode' NodeResources {..} workers' plugins' = ActionSpec $ \diffusion -> ntpCheck $ do
+runNode' NodeResources {..} workers' plugins' = ActionSpec $ \diffusion -> maybeNtpCheck $ do
     logInfo $ "Built with: " <> pretty compileInfo
     nodeStartMsg
     inAssertMode $ logInfo "Assert mode on"
@@ -101,7 +101,13 @@ runNode' NodeResources {..} workers' plugins' = ActionSpec $ \diffusion -> ntpCh
             sformat ("Worker/plugin with logger name "%shown%
                     " failed with exception: "%shown)
             loggerName e
-    ntpCheck = withNtpCheck $ ntpSettings onNtpStatusLogWarning
+    useNtp = case ncSlottingContext nrContext of
+        SCNtp _    -> True
+        SCSimple _ -> False
+    maybeNtpCheck =
+        if useNtp
+        then withNtpCheck $ ntpSettings onNtpStatusLogWarning
+        else identity
 
 -- | Entry point of full node.
 -- Initialization, running of workers, running of plugins.
