@@ -13,7 +13,6 @@ import qualified Data.ByteString.Lazy.Char8 as BL8
 import           Data.Maybe (fromJust)
 import           Mockable (Production (..), runProduction)
 import           Pos.Communication (ActionSpec (..))
-import qualified Pos.Client.CLI as CLI
 import           Pos.DB.DB (initNodeDBs)
 import           Pos.Launcher (NodeParams (..), NodeResources (..), bracketNodeResources,
                                loggerBracket, runNode, withConfigurations,
@@ -28,12 +27,10 @@ import           Pos.Wallet.Web (bracketWalletWS, bracketWalletWebDB, getSKById,
                                  runWRealMode, syncWalletsWithGState, AddrCIdHashes (..))
 import           Pos.Wallet.Web.Mode (WalletWebMode)
 import           Pos.Wallet.Web.State (flushWalletStorage)
-import           Servant.Swagger (HasSwagger)
 import           System.Wlog (LoggerName, logInfo,
                               Severity, usingLoggerName, logMessage)
 
 import qualified Cardano.Wallet.API.V1.Swagger as Swagger
-import           Cardano.Wallet.API (externalWalletAPI, walletAPI)
 import           Cardano.Wallet.Server.CLI (WalletBackendParams (..), WalletDBOptions (..),
                                             WalletStartupOptions (..), getWalletNodeOptions,
                                             isDebugMode,
@@ -41,6 +38,7 @@ import           Cardano.Wallet.Server.CLI (WalletBackendParams (..), WalletDBOp
 import qualified Cardano.Wallet.Server.Plugins as Plugins
 import qualified Cardano.Wallet.Kernel      as Kernel
 import qualified Cardano.Wallet.Kernel.Mode as Kernel.Mode
+import qualified Pos.Client.CLI as CLI
 
 -- | Default logger name when one is not provided on the command line
 defaultLoggerName :: LoggerName
@@ -134,14 +132,13 @@ actionWithNewWallet sscParams nodeParams params =
 startEdgeNode :: HasCompileInfo
               => WalletStartupOptions
               -> Production ()
-startEdgeNode WalletStartupOptions{..} =
+startEdgeNode WalletStartupOptions{..} = do
   withConfigurations conf $ do
       (sscParams, nodeParams) <- getParameters
       case wsoWalletBackendParams of
         WalletLegacy legacyParams -> do
-          if isDebugMode $ walletRunMode legacyParams
-              then generateSwaggerDocumentation walletAPI
-              else generateSwaggerDocumentation externalWalletAPI
+          when (isDebugMode $ walletRunMode legacyParams) $
+              generateSwaggerDocumentation
           actionWithWallet sscParams nodeParams legacyParams
         WalletNew newParams ->
           actionWithNewWallet sscParams nodeParams newParams
@@ -172,12 +169,9 @@ startEdgeNode WalletStartupOptions{..} =
 generateSwaggerDocumentation :: ( MonadIO m
                                 , HasCompileInfo
                                 , HasUpdateConfiguration
-                                , HasSwagger a
-                                )
-                             => Proxy a
-                             -> m ()
-generateSwaggerDocumentation api = liftIO $ do
-    BL8.writeFile "wallet-new/spec/swagger.json" (encodePretty $ Swagger.api api)
+                                ) => m ()
+generateSwaggerDocumentation = liftIO $ do
+    BL8.writeFile "wallet-new/spec/swagger.json" (encodePretty Swagger.api)
     putText "Swagger API written on disk."
 
 -- | The main entrypoint for the Wallet.

@@ -1,8 +1,6 @@
 
 module Cardano.Wallet.API
-       ( ExternalWalletAPI
-       , WalletAPI
-       , externalWalletAPI
+       ( WalletAPI
        , walletAPI
        ) where
 
@@ -28,28 +26,17 @@ import qualified Cardano.Wallet.API.Development as Dev
 -- * 'Cardano.Wallet.API.V0.Handlers' contains all the @Handler@s serving the V0 API;
 -- * 'Cardano.Wallet.API.V1.Handlers' contains all the @Handler@s serving the V1 API;
 -- * 'Cardano.Wallet.API.Development.Handlers' contains all the @Handler@s serving the Dev API;
+--
 
-
-type V0API =
-    "api" :> Tags '["V0 (Deprecated)"]
-          :> V0.API
-
-type V1API =
-    "api" :> "v1"
-          :> Tags '["V1"]
-          :> V1.API
-
-type DevAPI =
-    "api" :> "development"
-          :> Tags '["Development"]
-          :> Dev.API
-
-type WalletAPI = V0API :<|> V1API :<|> DevAPI
+type WalletAPI
+    =       "api" :> Tags '["V0 (Deprecated)"]
+                  :> V0.API
+      :<|>  "api" :> "v1"
+                  :> Tags '["V1"]
+                  :> V1.API
+      :<|>  "api" :> "development"
+                  :> Tags '["Development"]
+                  :> Dev.API
 
 walletAPI :: Proxy WalletAPI
 walletAPI = Proxy
-
-type ExternalWalletAPI = V0API :<|> V1API
-
-externalWalletAPI :: Proxy ExternalWalletAPI
-externalWalletAPI = Proxy
