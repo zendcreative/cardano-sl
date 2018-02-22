@@ -2,14 +2,15 @@
 module Cardano.Wallet.API
        ( WalletAPI
        , walletAPI
+       , publicAPI
        ) where
 
 import           Servant ((:<|>), (:>), Proxy (..))
 
+import qualified Cardano.Wallet.API.Development as Dev
 import           Cardano.Wallet.API.Types
 import qualified Cardano.Wallet.API.V0 as V0
 import qualified Cardano.Wallet.API.V1 as V1
-import qualified Cardano.Wallet.API.Development as Dev
 
 -- | The complete API, qualified by its versions. For backward compatibility's sake, we still expose
 -- the old API under @/api/@. Specification is split under separate modules.
@@ -28,15 +29,22 @@ import qualified Cardano.Wallet.API.Development as Dev
 -- * 'Cardano.Wallet.API.Development.Handlers' contains all the @Handler@s serving the Dev API;
 --
 
-type WalletAPI
-    =       "api" :> Tags '["V0 (Deprecated)"]
+type ExternalAPI =
+            "api" :> Tags '["V0 (Deprecated)"]
                   :> V0.API
       :<|>  "api" :> "v1"
                   :> Tags '["V1"]
                   :> V1.API
-      :<|>  "api" :> "development"
+
+type InternalAPI =
+            "api" :> "development"
                   :> Tags '["Development"]
                   :> Dev.API
 
+type WalletAPI = ExternalAPI :<|> InternalAPI
+
 walletAPI :: Proxy WalletAPI
 walletAPI = Proxy
+
+publicAPI :: Proxy ExternalAPI
+publicAPI = Proxy

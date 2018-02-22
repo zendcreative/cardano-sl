@@ -25,8 +25,8 @@ import           Pos.Client.Txp.Util (InputSelectionPolicy)
 import qualified Pos.Core as Core
 import           Pos.Update.Configuration (HasUpdateConfiguration, curSoftwareVersion)
 import           Pos.Util.CompileInfo (HasCompileInfo, compileInfo, ctiGitRevision)
-import           Pos.Wallet.Web.Swagger.Instances.Schema ()
 import           Pos.Wallet.Web.Methods.Misc (WalletStateSnapshot)
+import           Pos.Wallet.Web.Swagger.Instances.Schema ()
 
 import           Control.Lens ((?~))
 import           Data.Aeson (ToJSON (..), Value (Number, Object))
@@ -533,7 +533,7 @@ data DescriptionEnvironment = DescriptionEnvironment {
   }
 
 api :: (HasCompileInfo, HasUpdateConfiguration) => Swagger
-api = toSwagger walletAPI
+api = toSwagger publicAPI
   & info.title   .~ "Cardano Wallet API"
   & info.version .~ "2.0"
   & host ?~ "127.0.0.1:8090"
