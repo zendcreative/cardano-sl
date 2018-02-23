@@ -60,7 +60,7 @@ import           Pos.Update (UpdateBlock)
 import           Pos.Update.Context (UpdateContext)
 import           Pos.Update.Logic (usApplyBlocks, usNormalize, usRollbackBlocks)
 import           Pos.Update.Poll (PollModifier)
-import           Pos.Util (Some (..), spanSafe)
+import           Pos.Util (Some (..), spanSafe, tMeasureIO)
 import           Pos.Util.Chrono (NE, NewestFirst (..), OldestFirst (..))
 import           Pos.Util.Util (HasLens', lensOf)
 
@@ -145,8 +145,9 @@ applyBlocksUnsafe
     -> OldestFirst NE Blund
     -> Maybe PollModifier
     -> m ()
-applyBlocksUnsafe scb blunds pModifier = do
-    -- Check that all blunds have the same epoch.
+applyBlocksUnsafe scb blunds pModifier = tMeasureIO "applyBlocksUnsafe" $ do
+    -- Check that all blunds have the same epoch. This check is pretty
+    -- cheap.
     unless (null nextEpoch) $ assertionFailed $
         sformat ("applyBlocksUnsafe: tried to apply more than we should"%
                  "thisEpoch"%listJson%"\nnextEpoch:"%listJson)
@@ -180,22 +181,26 @@ applyBlocksDbUnsafeDo scb blunds pModifier = do
     let blocks = fmap fst blunds
     -- Note: it's important to do 'slogApplyBlocks' first, because it
     -- puts blocks in DB.
-    slogBatch <- slogApplyBlocks scb blunds
+    slogBatch <- tMeasureIO "applyBlocksUnsafe.slog" $ slogApplyBlocks scb blunds
     TxpGlobalSettings {..} <- view (lensOf @TxpGlobalSettings)
-    usBatch <- SomeBatchOp <$> usApplyBlocks (map toUpdateBlock blocks) pModifier
-    delegateBatch <- SomeBatchOp <$> dlgApplyBlocks (map toDlgBlund blunds)
-    txpBatch <- tgsApplyBlocks $ map toTxpBlund blunds
-    sscBatch <- SomeBatchOp <$>
+    usBatch <- tMeasureIO "applyBlocksUnsafe.us" $ SomeBatchOp <$> usApplyBlocks (map toUpdateBlock blocks) pModifier
+    delegateBatch <- tMeasureIO "applyBlocksUnsafe.dlg" $ SomeBatchOp <$> dlgApplyBlocks (map toDlgBlund blunds)
+    txpBatch <- tMeasureIO "applyBlocksUnsafe.txp" $ tgsApplyBlocks $ map toTxpBlund blunds
+    sscBatch <-
+        tMeasureIO "applyBlocksUnsafe.ssc" $
+        SomeBatchOp <$>
         -- TODO: pass not only 'Nothing'
         sscApplyBlocks (map toSscBlock blocks) Nothing
-    GS.writeBatchGState
+
+    tMeasureIO "applyBlocksUnsafe.writeBatch" $
+      GS.writeBatchGState
         [ delegateBatch
         , usBatch
         , txpBatch
         , sscBatch
         , slogBatch
         ]
-    sanityCheckDB
+    tMeasureIO "applyBlocksUnsafe.sanity" $ sanityCheckDB
 
 -- | Rollback sequence of blocks, head-newest order expected with head being
 -- current tip. It's also assumed that lock on block db is taken already.
