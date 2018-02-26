@@ -1,6 +1,6 @@
 {-# LANGUAGE DeriveAnyClass       #-}
-{-# LANGUAGE UndecidableInstances #-}
 {-# LANGUAGE OverloadedStrings    #-}
+{-# LANGUAGE UndecidableInstances #-}
 
 -- | Idealized specification of UTxO-style accounting
 module UTxO.DSL (
@@ -68,18 +68,21 @@ module UTxO.DSL (
   , chainToLedger
   ) where
 
-import Universum
-import Control.Exception (throw)
-import Data.List (tail)
-import Data.Map.Strict (Map)
-import Data.Set (Set)
-import Formatting (sformat, bprint, build, (%))
-import Pos.Util.Chrono
-import Serokell.Util (listJson, mapJson)
-import Prelude (Show(..))
+import           Control.Exception (throw)
+import           Control.Monad.Except (MonadError (..))
+import           Data.List (tail)
+import           Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import qualified Data.Set        as Set
+import           Data.Set (Set)
+import qualified Data.Set as Set
 import qualified Data.Text.Buildable
+import           Formatting (bprint, build, sformat, (%))
+import           Pos.Util.Chrono
+import           Prelude (Show (..))
+import           Serokell.Util (listJson, mapJson)
+import           Universum
+
+import           Util.Validated
 
 {-------------------------------------------------------------------------------
   Parameters
@@ -137,17 +140,17 @@ trIns' = Set.toList . trIns
 -- NOTE: The notion of 'valid' is not relevant for UTxO transactions,
 -- so we omit it.
 trIsAcceptable :: (Hash h a, Buildable a)
-               => Transaction h a -> Ledger h a -> Either Text ()
+               => Transaction h a -> Ledger h a -> Validated Text ()
 trIsAcceptable t l = sequence_ [
       allInputsHaveOutputs
     , valueIsPreserved
     , inputsHaveNotBeenSpent
     ]
   where
-    allInputsHaveOutputs :: Either Text ()
+    allInputsHaveOutputs :: Validated Text ()
     allInputsHaveOutputs = forM_ (trIns t) $ \inp ->
         whenNothing_ (inpSpentOutput inp l) $
-          Left (sformat
+          throwError (sformat
             ( "In transaction "
             % build
             % ": cannot resolve input "
@@ -159,10 +162,10 @@ trIsAcceptable t l = sequence_ [
     -- TODO: Ideally, we would require here that @sumIn == sumOut@. However,
     -- as long as we have to be conservative about fees, we will not be able
     -- to achieve that in the unit tests.
-    valueIsPreserved :: Either Text ()
+    valueIsPreserved :: Validated Text ()
     valueIsPreserved =
         unless (sumIn >= sumOut) $
-          Left $ sformat
+          throwError $ sformat
             ( "In transaction "
             % build
             % ": value not preserved (in: "
@@ -182,10 +185,10 @@ trIsAcceptable t l = sequence_ [
         sumIn  = sum (map (`inpVal'` l) (trIns' t)) + trFresh t
         sumOut = sum (map outVal        (trOuts t)) + trFee   t
 
-    inputsHaveNotBeenSpent :: Either Text ()
+    inputsHaveNotBeenSpent :: Validated Text ()
     inputsHaveNotBeenSpent = forM_ (trIns t) $ \inp ->
         unless (inp `Set.member` ledgerUnspentOutputs l) $
-          Left $ sformat
+          throwError $ sformat
             ( "In transaction "
             % build
             % ": input "
@@ -205,8 +208,8 @@ trBalance a t l = received - spent
                                          AddrTreasury -> trFee t
                                          _otherwise   -> 0
     spent    = total outputsSpent    + case a of
-                                         AddrGenesis  -> trFresh t
-                                         _otherwise   -> 0
+                                         AddrGenesis -> trFresh t
+                                         _otherwise  -> 0
 
     outputsReceived, outputsSpent :: [Output a]
     outputsReceived = our $                            trOuts t
@@ -353,7 +356,7 @@ ledgerUtxo l = go (ledgerToNewestFirst l)
     go (t:ts) = utxoRemoveInputs (trSpentOutputs t) (go ts) `utxoUnion` trUtxo t
 
 -- | Ledger validity
-ledgerIsValid :: (Hash h a, Buildable a) => Ledger h a -> Either Text ()
+ledgerIsValid :: (Hash h a, Buildable a) => Ledger h a -> Validated Text ()
 ledgerIsValid l = mapM_ (uncurry trIsAcceptable) (ledgerTails l)
 
 -- | Extracts the set of addresses present in the ledger.
