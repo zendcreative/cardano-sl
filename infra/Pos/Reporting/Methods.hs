@@ -63,8 +63,7 @@ import           System.Wlog (LoggerConfig (..), Severity (..), WithLogger, hwFi
 
 
 import           Paths_cardano_sl_infra (version)
-import           Pos.Core.Configuration (HasConfiguration, protocolMagic)
-import           Pos.Crypto (ProtocolMagic (..))
+import           Pos.Crypto (ProtocolMagic (..), HasProtocolMagic, protocolMagic)
 import           Pos.DB.Error (DBError (..))
 import           Pos.Exception (CardanoFatalError)
 import           Pos.KnownPeers (MonadFormatPeers (..))
@@ -90,7 +89,7 @@ import           Pos.Util.Util (maybeThrow, (<//>))
 -- same file, see 'System.IO' documentation on handles. See
 -- 'withTempLogFile' to overcome this problem.
 sendReport
-    :: (HasConfiguration, HasCompileInfo, MonadIO m, MonadMask m)
+    :: (HasProtocolMagic, HasCompileInfo, MonadIO m, MonadMask m)
     => [FilePath]                 -- ^ Log files to read from
     -> ReportType
     -> Text
@@ -202,7 +201,7 @@ type MonadReporting ctx m =
        , HasReportingContext ctx
        , HasNodeType ctx
        , WithLogger m
-       , HasConfiguration
+       , HasProtocolMagic
        , HasCompileInfo
        )
 
