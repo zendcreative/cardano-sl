@@ -17,11 +17,16 @@ import qualified Control.Exception.Safe as E
 import           Control.Monad.Except (MonadError (throwError))
 import qualified Control.Monad.Reader as Mtl
 import           Data.Aeson.TH (defaultOptions, deriveToJSON)
-import           Data.Default (Default)
+import qualified Data.ByteString.Char8 as BSC
+import           Data.Default (Default, def)
+import           Data.X509 (HashALG (..))
+import           Data.X509.Validation (defaultChecks, defaultHooks, validate)
+import           Data.X509.CertificateStore (readCertificateStore)
 import           Mockable (Async, Mockable, Production (runProduction), withAsync)
+import           Network.TLS (ServerHooks (..), CertificateUsage (..), CertificateRejectReason (..))
 import           Network.Wai (Application)
 import           Network.Wai.Handler.Warp (defaultSettings, runSettings, setHost, setPort)
-import           Network.Wai.Handler.WarpTLS (TLSSettings, runTLS, tlsSettingsChain)
+import           Network.Wai.Handler.WarpTLS (TLSSettings (..), runTLS, tlsSettingsChain)
 import           Servant.API ((:<|>) ((:<|>)), FromHttpApiData)
 import           Servant.Server (Handler, HasServer, ServantErr (errBody), Server, ServerT, err404,
                                  err503, hoistServer, serve)
@@ -92,10 +97,38 @@ serveImpl app host port walletTLSParams =
   where
     mySettings = setHost (fromString host) $
                  setPort (fromIntegral port) defaultSettings
-    mTlsConfig = tlsParamsToWai <$> walletTLSParams
+    mTlsConfig = tlsParamsToWai host port <$> walletTLSParams
 
-tlsParamsToWai :: TlsParams -> TLSSettings
-tlsParamsToWai TlsParams{..} = tlsSettingsChain tpCertPath [tpCaPath] tpKeyPath
+tlsParamsToWai
+    :: String -> Word16 -> TlsParams -> TLSSettings
+tlsParamsToWai host port TlsParams{..} = tlsSettingsWithCertCheck
+  where
+    tlsSettings = tlsSettingsChain tpCertPath [tpCaPath] tpKeyPath
+    tlsSettingsWithCertCheck = tlsSettings {
+        -- Demand a certificate from the client.
+        tlsWantClientCert = True,
+        -- We must handle received certificates in a server hook
+        -- or all connections will fail.
+        tlsServerHooks = hooksWithCertCheck
+    }
+    hooksWithCertCheck = def {
+        onClientCertificate = \certChain ->
+            readCertificateStore tpCaPath >>= \case
+                Nothing -> return $ CertificateUsageReject $
+                    CertificateRejectOther "Cannot init a store, unable to validate client certificates"
+                Just certsStore ->
+                    validate HashSHA256
+                             defaultHooks
+                             defaultChecks
+                             certsStore
+                             def
+                             (host, BSC.pack $ show port)
+                             certChain
+                    >>= \case
+                        []       -> return CertificateUsageAccept
+                        problems -> return $ CertificateUsageReject $
+                            CertificateRejectOther $ show problems
+    }
 
 ----------------------------------------------------------------------------
 -- Servant infrastructure
