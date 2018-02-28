@@ -31,7 +31,7 @@ import           Pos.Core (Block, HasHeaderHash (..), HeaderHash, difficultyL, i
 import           Pos.Core.Block (BlockHeader)
 import           Pos.Crypto (shortHashF)
 import qualified Pos.DB.BlockIndex as DB
-import           Pos.Diffusion.Types (Diffusion)
+import           Pos.Diffusion.Types (Diffusion, StreamEntry (..))
 import qualified Pos.Diffusion.Types as Diffusion (Diffusion (getBlocks, streamBlocks))
 import           Pos.Reporting (reportOrLogE, reportOrLogW)
 import           Pos.Util.Chrono (NE, OldestFirst (..), _OldestFirst)
@@ -319,14 +319,16 @@ streamProcessBlocks
     -> [HeaderHash]
     -> m ()
 streamProcessBlocks diffusion nodeId desired checkpoints = do
-    _ <- Diffusion.streamBlocks diffusion nodeId desired checkpoints (loop True)
+    _ <- Diffusion.streamBlocks diffusion nodeId desired checkpoints loop
     return ()
   where
-    loop False _ = return ()
-    loop True blockChan = do
-        block <- atomically $ readTBQueue blockChan
-        handleBlocks nodeId (OldestFirst (block :| [])) diffusion
-        loop True blockChan
+    loop blockChan = do
+        streamEntry <- atomically $ readTBQueue blockChan
+        case streamEntry of
+          StreamEnd         -> return ()
+          StreamBlock block -> do
+            handleBlocks nodeId (OldestFirst (block :| [])) diffusion
+            loop blockChan
 
 
 

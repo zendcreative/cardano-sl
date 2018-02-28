@@ -44,6 +44,7 @@ import           Pos.Core.Block (Block, BlockHeader (..), MainBlockHeader, block
 import           Pos.Crypto (shortHashF)
 import           Pos.DB (DBError (DBMalformed))
 import           Pos.Diffusion.Full.Types (DiffusionWorkMode)
+import           Pos.Diffusion.Types (StreamEntry (..))
 import           Pos.Exception (cardanoExceptionFromException, cardanoExceptionToException)
 import           Pos.Logic.Types (Logic (..))
 import           Pos.Network.Types (Bucket)
@@ -287,7 +288,7 @@ streamBlocks
     -> NodeId
     -> BlockHeader
     -> [HeaderHash]
-    -> (Conc.TBQueue Block -> d t)
+    -> (Conc.TBQueue StreamEntry -> d t)
     -> d t
 streamBlocks _ enqueue nodeId tipHeader _ k = do
     blockChan <- atomically $ Conc.newTBQueue $ fromIntegral segmentSize
@@ -306,7 +307,7 @@ streamBlocks _ enqueue nodeId tipHeader _ k = do
         , mgbTo = wantedBlock
         }
 
-    requestBlocks :: Conc.TBQueue Block -> NewestFirst NE BlockHeader -> d ()
+    requestBlocks :: Conc.TBQueue StreamEntry -> NewestFirst NE BlockHeader -> d ()
     requestBlocks blockChan headers = enqueueMsgSingle
         enqueue
         (MsgRequestBlocks (S.singleton nodeId))
@@ -315,7 +316,7 @@ streamBlocks _ enqueue nodeId tipHeader _ k = do
     segmentSize = 64 :: Word -- XXX
 
     requestBlocksConversation
-        :: Conc.TBQueue Block
+        :: Conc.TBQueue StreamEntry
         -> NewestFirst NE BlockHeader
         -> ConversationActions MsgGetBlocks MsgBlock d
         -> d ()
@@ -331,15 +332,17 @@ streamBlocks _ enqueue nodeId tipHeader _ k = do
     -- A piece of the block retrieval conversation in which the blocks are
     -- pulled in one-by-one.
     retrieveBlocks
-        :: Conc.TBQueue Block
+        :: Conc.TBQueue StreamEntry
         -> ConversationActions MsgGetBlocks MsgBlock d
         -> [(BlockHeader, BlockHeader)]
         -> Word
         -> d ()
-    retrieveBlocks _ _ [] 0 = return ()
+    retrieveBlocks blockChan _ [] 0 = do
+        atomically $ Conc.writeTBQueue blockChan StreamEnd
+        return ()
     retrieveBlocks blockChan conv [] outStandingReq = do
         block <- retrieveBlock conv
-        atomically $ Conc.writeTBQueue blockChan block
+        atomically $ Conc.writeTBQueue blockChan (StreamBlock block)
         retrieveBlocks blockChan conv [] (outStandingReq - 1)
     retrieveBlocks blockChan conv (seg:segs) outStandingReq = do
         (segs',osq) <- if outStandingReq < segmentSize `div` 2
@@ -352,7 +355,7 @@ streamBlocks _ enqueue nodeId tipHeader _ k = do
                               return $ (NE.tail (seg :| segs), outStandingReq + segmentSize - 1)
                     else return (segs, outStandingReq - 1)
         block <- retrieveBlock conv
-        atomically $ Conc.writeTBQueue blockChan block
+        atomically $ Conc.writeTBQueue blockChan (StreamBlock block)
         retrieveBlocks blockChan conv segs' osq
 
     retrieveBlock

@@ -53,7 +53,7 @@ import qualified Pos.Diffusion.Full.Update as Diffusion.Update
 import           Pos.Diffusion.Subscription.Common (subscriptionListeners)
 import           Pos.Diffusion.Subscription.Dht (dhtSubscriptionWorker)
 import           Pos.Diffusion.Subscription.Dns (dnsSubscriptionWorker)
-import           Pos.Diffusion.Types (Diffusion (..), DiffusionLayer (..))
+import           Pos.Diffusion.Types (Diffusion (..), DiffusionLayer (..), StreamEntry)
 import           Pos.Logic.Types (Logic (..))
 import           Pos.Network.Types (NetworkConfig (..), Topology (..), Bucket (..), initQueue,
                                     topologySubscribers, SubscriptionWorker (..),
@@ -256,7 +256,7 @@ diffusionLayerFull networkConfig lastKnownBlockVersion transport mEkgNodeMetrics
                       => NodeId
                       -> BlockHeader
                       -> [HeaderHash]
-                      -> (TBQueue Block -> d t)
+                      -> (TBQueue StreamEntry -> d t)
                       -> d t
             streamBlocks = Diffusion.Block.streamBlocks logic enqueue
 

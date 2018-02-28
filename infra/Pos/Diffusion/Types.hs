@@ -5,6 +5,7 @@ module Pos.Diffusion.Types
     ( DiffusionLayer (..)
     , Diffusion (..)
     , dummyDiffusionLayer
+    , StreamEntry (..)
     ) where
 
 import           Universum
@@ -21,6 +22,8 @@ import           Pos.Core.Ssc                     (Opening, InnerSharesMap, Sign
                                                    VssCertificate)
 import           Pos.Util.Chrono                  (OldestFirst (..))
 
+data StreamEntry = StreamEnd | StreamBlock Block
+
 -- | The interface to a diffusion layer, i.e. some component which takes care
 -- of getting data in from and pushing data out to a network.
 data Diffusion m = Diffusion
@@ -36,7 +39,7 @@ data Diffusion m = Diffusion
                          => NodeId
                          -> BlockHeader
                          -> [HeaderHash]
-                         -> (TBQueue Block -> m t)
+                         -> (TBQueue StreamEntry -> m t)
                          -> m t
       -- | This is needed because there's a security worker which will request
       -- tip-of-chain from the network if it determines it's very far behind.
