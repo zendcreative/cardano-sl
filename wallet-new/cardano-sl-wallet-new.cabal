@@ -88,6 +88,7 @@ library
                      , string-conv
                      , template-haskell
                      , time
+                     , time-units
                      , text
                      , text-format
                      , transformers
