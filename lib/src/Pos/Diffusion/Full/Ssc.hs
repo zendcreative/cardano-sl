@@ -41,8 +41,8 @@ sscListeners
        )
     => Logic m
     -> OQ.OutboundQ pack NodeId Bucket
-    -> EnqueueMsg m
-    -> MkListeners m
+    -> EnqueueMsg
+    -> MkListeners
 sscListeners logic oq enqueue = relayListeners oq enqueue (sscRelays logic)
 
 sscRelays
@@ -54,7 +54,7 @@ sscRelays
        , MessageLimited (DataMsg MCOpening) m
        )
     => Logic m
-    -> [Relay m]
+    -> [Relay]
 sscRelays logic =
     [ commitmentRelay (postSscCommitment logic)
     , openingRelay (postSscOpening logic)
@@ -80,7 +80,7 @@ commitmentRelay
        , DiffusionWorkMode m
        )
     => KV.KeyVal (Tagged MCCommitment StakeholderId) MCCommitment m
-    -> Relay m
+    -> Relay
 commitmentRelay kv = sscRelay kv
 
 openingRelay
@@ -89,7 +89,7 @@ openingRelay
        , DiffusionWorkMode m
        )
     => KV.KeyVal (Tagged MCOpening StakeholderId) MCOpening m
-    -> Relay m
+    -> Relay
 openingRelay kv = sscRelay kv
 
 sharesRelay
@@ -98,7 +98,7 @@ sharesRelay
        , DiffusionWorkMode m
        )
     => KV.KeyVal (Tagged MCShares StakeholderId) MCShares m
-    -> Relay m
+    -> Relay
 sharesRelay kv = sscRelay kv
 
 vssCertRelay
@@ -107,7 +107,7 @@ vssCertRelay
        , DiffusionWorkMode m
        )
     => KV.KeyVal (Tagged MCVssCertificate StakeholderId) MCVssCertificate m
-    -> Relay m
+    -> Relay
 vssCertRelay kv = sscRelay kv
 
 sscRelay
@@ -121,7 +121,7 @@ sscRelay
        , DiffusionWorkMode m
        )
     => KV.KeyVal (Tagged contents StakeholderId) contents m
-    -> Relay m
+    -> Relay
 sscRelay kv =
     InvReqData NoMempool $
         InvReqDataParams

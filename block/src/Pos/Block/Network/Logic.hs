@@ -1,54 +1,44 @@
 {-# LANGUAGE AllowAmbiguousTypes #-}
 {-# LANGUAGE RankNTypes          #-}
 
--- | Network-related logic that's mostly methods and dialogs between
--- nodes. Also see "Pos.Block.Network.Retrieval" for retrieval worker
--- loop logic.
+-- | Block retrieval logic abstracted over a diffusion layer.
+-- FIXME rename. Should not mention 'Network'.
+
 module Pos.Block.Network.Logic
-       (
-         BlockNetLogicException (..)
-       , triggerRecovery
-       , requestTipOuts
-       , requestTip
-
+       ( triggerRecovery
        , handleBlocks
-
-       , handleUnsolicitedHeader
        ) where
 
 import           Universum
 
 import           Control.Concurrent.STM (isFullTBQueue, readTVar, writeTBQueue, writeTVar)
-import           Control.Exception.Safe (Exception (..))
+import           Control.Exception (IOException)
+import           Control.Monad.Catch (handle)
 import qualified Data.List.NonEmpty as NE
-import qualified Data.Text.Buildable as B
-import           Formatting (bprint, build, sformat, shown, stext, (%))
+import qualified Data.Map as M (assocs)
+import           Formatting (build, sformat, shown, stext, (%))
+import           Mockable (forConcurrently)
 import           Serokell.Util.Text (listJson)
 import qualified System.Metrics.Gauge as Metrics
-import           System.Wlog (logDebug, logInfo, logWarning)
+import           System.Wlog (logDebug, logInfo, logWarning, logError)
 
-import           Pos.Binary.Txp ()
-import           Pos.Block.BlockWorkMode (BlockInstancesConstraint, BlockWorkMode)
+import           Pos.Block.BlockWorkMode (BlockWorkMode)
 import           Pos.Block.Configuration (criticalForkThreshold)
 import           Pos.Block.Error (ApplyBlocksException)
 import           Pos.Block.Logic (ClassifyHeaderRes (..), classifyNewHeader, lcaWithMainChain,
                                   verifyAndApplyBlocks)
 import qualified Pos.Block.Logic as L
-import           Pos.Block.Network.Types (MsgGetHeaders (..), MsgHeaders (..))
 import           Pos.Block.RetrievalQueue (BlockRetrievalQueue, BlockRetrievalQueueTag,
                                            BlockRetrievalTask (..))
 import           Pos.Block.Types (Blund, LastKnownHeaderTag)
-import           Pos.Communication.Limits.Types (recvLimited)
-import           Pos.Communication.Protocol (ConversationActions (..), NodeId, OutSpecs, convH,
-                                             toOutSpecs)
+import           Pos.Communication.Protocol (NodeId)
 import           Pos.Core (HasHeaderHash (..), HeaderHash, gbHeader, headerHashG, isMoreDifficult,
                            prevBlockL)
 import           Pos.Core.Block (Block, BlockHeader, blockHeader)
 import           Pos.Crypto (shortHashF)
 import qualified Pos.DB.Block.Load as DB
 import           Pos.Diffusion.Types (Diffusion)
-import qualified Pos.Diffusion.Types as Diffusion (Diffusion (announceBlockHeader, requestTip))
-import           Pos.Exception (cardanoExceptionFromException, cardanoExceptionToException)
+import qualified Pos.Diffusion.Types as Diffusion (Diffusion (announceBlockHeader, requestTips))
 import           Pos.Recovery.Info (recoveryInProgress)
 import           Pos.Reporting.MemState (HasMisbehaviorMetrics (..), MisbehaviorMetrics (..))
 import           Pos.Reporting.Methods (reportMisbehaviour)
@@ -62,87 +52,50 @@ import           Pos.Util.TimeWarp (CanJsonLog (..))
 import           Pos.Util.Util (lensOf)
 
 ----------------------------------------------------------------------------
--- Exceptions
-----------------------------------------------------------------------------
-
-data BlockNetLogicException
-    = DialogUnexpected Text
-      -- ^ Node's response in any network/block related logic was
-      -- unexpected.
-    | BlockNetLogicInternal Text
-      -- ^ We don't expect this to happen. Most probably it's internal
-      -- logic error.
-    deriving (Show)
-
-instance B.Buildable BlockNetLogicException where
-    build e = bprint ("BlockNetLogicException: "%shown) e
-
-instance Exception BlockNetLogicException where
-    toException = cardanoExceptionToException
-    fromException = cardanoExceptionFromException
-    displayException = toString . pretty
-
-----------------------------------------------------------------------------
 -- Recovery
 ----------------------------------------------------------------------------
 
--- | Start recovery based on established communication. “Starting recovery”
--- means simply sending all our neighbors a 'MsgGetHeaders' message (see
--- 'requestTip'), so sometimes 'triggerRecovery' is used simply to ask for
--- tips.
---
--- Note that when recovery is in progress (see 'recoveryInProgress'),
--- 'triggerRecovery' does nothing. It's okay because when recovery is in
--- progress and 'ncRecoveryHeader' is full, we'll be requesting blocks anyway
--- and until we're finished we shouldn't be asking for new blocks.
+-- | Speculatively attempt to enter "recovery mode" by asking the diffusion
+-- layer for the tip-of-chain headers from peers. "Speculatively" because
+-- this doesn't actually enter recovery mode unless one of those tips is not
+-- a direct continuation of the current (at time of receive) tip in the
+-- database.
 triggerRecovery
-    :: BlockWorkMode ctx m
+    :: forall ctx m.
+       ( BlockWorkMode ctx m )
     => Diffusion m -> m ()
 triggerRecovery diffusion = unlessM recoveryInProgress $ do
     logDebug "Recovery triggered, requesting tips from neighbors"
-    -- I know, it's not unsolicited. TODO rename.
-    void (Diffusion.requestTip diffusion $ handleUnsolicitedHeader) `catch`
-        \(e :: SomeException) -> do
-           logDebug ("Error happened in triggerRecovery: " <> show e)
-           throwM e
+    tipsMap <- Diffusion.requestTips diffusion
+    -- Wait for each handler and handle it.
+    -- Exceptions are squelched. A failure to get from one peer does not
+    -- kill all attempts.
+    void $ forConcurrently (M.assocs tipsMap) (handleOne)
     logDebug "Finished requesting tips for recovery"
-
-requestTipOuts :: BlockInstancesConstraint m => Proxy m -> OutSpecs
-requestTipOuts _ =
-    toOutSpecs [ convH (Proxy :: Proxy MsgGetHeaders)
-                       (Proxy :: Proxy MsgHeaders) ]
-
--- | Is used if we're recovering after offline and want to know what's
--- current blockchain state. Sends "what's your current tip" request
--- to everybody we know.
-requestTip
-    :: BlockWorkMode ctx m
-    => NodeId
-    -> ConversationActions MsgGetHeaders MsgHeaders m
-    -> m ()
-requestTip nodeId conv = do
-    logDebug "Requesting tip..."
-    send conv (MsgGetHeaders [] Nothing)
-    whenJustM (recvLimited conv) handleTip
   where
-    handleTip (MsgHeaders (NewestFirst (tip:|[]))) = do
-        logDebug $ sformat ("Got tip "%shortHashF%", processing") (headerHash tip)
-        handleUnsolicitedHeader tip nodeId
-    handleTip t =
-        logWarning $ sformat ("requestTip: got unexpected response: "%shown) t
+    handleOne :: (NodeId, m BlockHeader) -> m ()
+    handleOne (nodeId, waitForHeader) = handle (squelchIOException nodeId) $ do
+        header <- waitForHeader
+        handleSolicitedHeader nodeId header
+    squelchIOException :: NodeId -> IOException -> m ()
+    squelchIOException nodeId _ = do
+        logError $ sformat ("triggerRecovery: error requesting tip from "%shown) nodeId
 
 ----------------------------------------------------------------------------
 -- Headers processing
 ----------------------------------------------------------------------------
 
-handleUnsolicitedHeader
+-- | Classify a solicited header (from 'triggerRecovery') and put it into the
+-- block retrieval queue (comes out of some reader context / lens, see
+-- 'BlockWorkMode').
+handleSolicitedHeader
     :: BlockWorkMode ctx m
-    => BlockHeader
-    -> NodeId
+    => NodeId
+    -> BlockHeader
     -> m ()
-handleUnsolicitedHeader header nodeId = do
+handleSolicitedHeader nodeId header = do
     logDebug $ sformat
-        ("handleUnsolicitedHeader: single header was propagated, processing:\n"
+        ("handleSolicitedHeader: processing:\n"
          %build) header
     classificationRes <- classifyNewHeader header
     -- TODO: should we set 'To' hash to hash of header or leave it unlimited?
@@ -154,10 +107,9 @@ handleUnsolicitedHeader header nodeId = do
             logDebug $ sformat alternativeFormat hHash
             addHeaderToBlockRequestQueue nodeId header False
         CHUseless reason -> logDebug $ sformat uselessFormat hHash reason
-        CHInvalid _ -> do
-            logWarning $ sformat ("handleUnsolicited: header "%shortHashF%
-                                " is invalid") hHash
-            pass -- TODO: ban node for sending invalid block.
+        CHInvalid _ ->
+            logWarning $ sformat ("handleSolicited: header "%shortHashF%
+                                  " is invalid") hHash
   where
     hHash = headerHash header
     continuesFormat =
@@ -168,6 +120,7 @@ handleUnsolicitedHeader header nodeId = do
         " potentially represents good alternative chain, will process"
     uselessFormat =
         "Header " %shortHashF % " is useless for the following reason: " %stext
+
 
 ----------------------------------------------------------------------------
 -- Putting things into request queue
@@ -222,14 +175,17 @@ updateLastKnownHeader lastKnownH header = do
 -- Handling blocks
 ----------------------------------------------------------------------------
 
--- | Carefully apply blocks that came from the network.
+-- | Apply blocks.
+-- A 'Diffusion m' is required because we may want to use it to relay the
+-- block. This is not how it ought to be; a diffusion layer should decide on
+-- its own whether to relay a block.
 handleBlocks
     :: forall ctx m. BlockWorkMode ctx m
-    => NodeId
+    => Diffusion m
+    -> NodeId
     -> OldestFirst NE Block
-    -> Diffusion m
     -> m ()
-handleBlocks nodeId blocks diffusion = do
+handleBlocks diffusion nodeId blocks = do
     logDebug "handleBlocks: processing"
     inAssertMode $ logInfo $
         sformat ("Processing sequence of blocks: " % buildListBounds % "...") $
@@ -344,6 +300,7 @@ applyWithRollback nodeId diffusion toApply lca toRollback = do
         NE.dropWhile ((lca /=) . (^. prevBlockL)) $
         getOldestFirst $ toApply
 
+-- FIXME diffusion layer should take care of relaying blocks.
 relayBlock
     :: forall ctx m.
        (BlockWorkMode ctx m)
@@ -361,7 +318,6 @@ relayBlock diffusion (Right mainBlk) = do
 -- Common logging / logic sink points
 ----------------------------------------------------------------------------
 
--- TODO: ban node for it!
 onFailedVerifyBlocks
     :: forall ctx m.
        (BlockWorkMode ctx m)
@@ -369,7 +325,6 @@ onFailedVerifyBlocks
 onFailedVerifyBlocks blocks err = do
     logWarning $ sformat ("Failed to verify blocks: "%stext%"\n  blocks = "%listJson)
         err (fmap headerHash blocks)
-    throwM $ DialogUnexpected err
 
 blocksAppliedMsg
     :: forall a.

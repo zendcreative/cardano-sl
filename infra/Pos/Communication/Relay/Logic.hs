@@ -24,20 +24,18 @@ module Pos.Communication.Relay.Logic
        , invReqDataFlowTK
        , dataFlow
        , InvReqDataFlowLog (..)
-
-       , MinRelayWorkMode
        ) where
 
+import           Control.Exception (throwIO)
 import           Control.Exception.Safe (handleAny, try)
 import           Data.Aeson.TH (defaultOptions, deriveJSON)
 import           Data.Proxy (asProxyTypeOf)
 import           Data.Tagged (Tagged, tagWith)
 import           Data.Typeable (typeRep)
 import           Formatting (build, sformat, shown, stext, (%))
-import           Mockable (MonadMockable)
 import qualified Network.Broadcast.OutboundQueue as OQ
 import           Node.Message.Class (Message)
-import           System.Wlog (WithLogger, logDebug, logError, logWarning)
+import           System.Wlog (LoggerNameBox, usingLoggerName, logDebug, logError, logWarning)
 import           Universum
 
 import           Pos.Binary.Class (Bi (..))
@@ -56,15 +54,8 @@ import           Pos.Communication.Types.Relay (DataMsg (..), InvMsg (..), InvOr
                                                 MempoolMsg (..), ReqMsg (..), ReqOrRes, ResMsg (..))
 import           Pos.Network.Types (Bucket)
 
-type MinRelayWorkMode m =
-    ( WithLogger m
-    , MonadMockable m
-    , MonadIO m
-    )
-
-type RelayWorkMode ctx m =
-    ( MinRelayWorkMode m
-    )
+logger :: LoggerNameBox IO t -> IO t
+logger = usingLoggerName "relay"
 
 data InvReqCommunicationException =
       UnexpectedRequest
@@ -76,17 +67,16 @@ data InvReqCommunicationException =
 instance Exception InvReqCommunicationException
 
 handleReqL
-    :: forall pack key contents m .
+    :: forall pack key contents .
        ( Bi (ReqMsg key)
        , Bi (InvOrData key contents)
        , Message (InvOrData key contents)
        , Message (ReqMsg key)
        , Buildable key
-       , MinRelayWorkMode m
        )
     => OQ.OutboundQ pack NodeId Bucket
-    -> (NodeId -> key -> m (Maybe contents))
-    -> (ListenerSpec m, OutSpecs)
+    -> (NodeId -> key -> IO (Maybe contents))
+    -> (ListenerSpec, OutSpecs)
 handleReqL oq handleReq = listenerConv oq $ \__ourVerInfo nodeId conv ->
     let handlingLoop = do
             mbMsg <- recvLimited conv
@@ -102,20 +92,18 @@ handleReqL oq handleReq = listenerConv oq $ \__ourVerInfo nodeId conv ->
   where
     constructDataMsg :: contents -> InvOrData key contents
     constructDataMsg = Right . DataMsg
-    logNoData rmKey = logDebug $ sformat
+    logNoData rmKey = logger $ logDebug $ sformat
         ("We don't have data for key "%build)
         rmKey
-    logHaveData rmKey= logDebug $ sformat
+    logHaveData rmKey= logger $ logDebug $ sformat
         ("We have data for key "%build)
         rmKey
 
 handleMempoolL
-    :: forall pack m.
-       ( MinRelayWorkMode m
-       )
-    => OQ.OutboundQ pack NodeId Bucket
-    -> MempoolParams m
-    -> [(ListenerSpec m, OutSpecs)]
+    :: forall pack.
+       OQ.OutboundQ pack NodeId Bucket
+    -> MempoolParams
+    -> [(ListenerSpec, OutSpecs)]
 handleMempoolL _ NoMempool = []
 handleMempoolL oq (KeyMempool tagP handleMempool) = pure $ listenerConv oq $
     \__ourVerInfo __nodeId conv -> do
@@ -125,33 +113,32 @@ handleMempoolL oq (KeyMempool tagP handleMempool) = pure $ listenerConv oq $
             res <- handleMempool
             case nonEmpty res of
                 Nothing ->
-                    logDebug $ sformat
+                    logger $ logDebug $ sformat
                         ("We don't have mempool data "%shown) (typeRep tagP)
                 Just xs -> do
-                    logDebug $ sformat ("We have mempool data "%shown) (typeRep tagP)
+                    logger $ logDebug $ sformat ("We have mempool data "%shown) (typeRep tagP)
                     mapM_ (send conv . InvMsg) xs
   where
     mmP = (const Proxy :: Proxy tag -> Proxy (MempoolMsg tag)) tagP
 
 handleDataOnlyL
-    :: forall pack contents ctx m .
+    :: forall pack contents.
        ( Bi (DataMsg contents)
        , Message Void
        , Message (DataMsg contents)
        , Buildable contents
-       , RelayWorkMode ctx m
-       , MessageLimited (DataMsg contents) m
+       , MessageLimited (DataMsg contents) IO
        )
     => OQ.OutboundQ pack NodeId Bucket
-    -> EnqueueMsg m
+    -> EnqueueMsg
     -> (Origin NodeId -> Msg)
-    -> (NodeId -> contents -> m Bool)
-    -> (ListenerSpec m, OutSpecs)
+    -> (NodeId -> contents -> IO Bool)
+    -> (ListenerSpec, OutSpecs)
 handleDataOnlyL oq enqueue mkMsg handleData = listenerConv oq $ \__ourVerInfo nodeId conv ->
     -- First binding is to inform GHC that the send type is Void.
     let msg :: Msg
         msg = mkMsg (OriginForward nodeId)
-        _ = send conv :: Void -> m ()
+        _ = send conv :: Void -> IO ()
         handlingLoop = do
             mbMsg <- recvLimited conv
             whenJust mbMsg $ \DataMsg{..} -> do
@@ -161,13 +148,12 @@ handleDataOnlyL oq enqueue mkMsg handleData = listenerConv oq $ \__ourVerInfo no
                 handlingLoop
     in handlingLoop
   where
-    logUseless dmContents = logWarning $ sformat
+    logUseless dmContents = logger $ logWarning $ sformat
         ("Ignoring data "%build) dmContents
 
 handleDataDo
-    :: forall key contents ctx m .
-       ( RelayWorkMode ctx m
-       , Buildable key
+    :: forall key contents.
+       ( Buildable key
        , Eq key
        , Buildable contents
        , Message (InvOrData key contents)
@@ -178,11 +164,11 @@ handleDataDo
        )
     => NodeId
     -> (Origin NodeId -> Msg)
-    -> EnqueueMsg m
-    -> (contents -> m key)
-    -> (contents -> m Bool)
+    -> EnqueueMsg
+    -> (contents -> IO key)
+    -> (contents -> IO Bool)
     -> contents
-    -> m (ResMsg key)
+    -> IO (ResMsg key)
 handleDataDo provenance mkMsg enqueue contentsToKey handleData dmContents = do
     dmKey <- contentsToKey dmContents
     ifM (handleData dmContents)
@@ -190,35 +176,30 @@ handleDataDo provenance mkMsg enqueue contentsToKey handleData dmContents = do
         -- enqueueMsg can do that: simply don't force the values in
         -- the resulting map.
         (ResMsg dmKey True <$ propagateData enqueue (InvReqDataPM (mkMsg (OriginForward provenance)) dmKey dmContents))
-        (ResMsg dmKey False <$ logDebug (sformat ("Ignoring data "%build%" for key "%build) dmContents dmKey))
+        (ResMsg dmKey False <$ (logger $ logDebug (sformat ("Ignoring data "%build%" for key "%build) dmContents dmKey)))
 
 -- | Synchronously propagate data.
 relayMsg
-    :: ( RelayWorkMode ctx m
-       , Message Void
-       )
-    => EnqueueMsg m
+    :: ( Message Void )
+    => EnqueueMsg
     -> PropagationMsg
-    -> m ()
+    -> IO ()
 relayMsg enqueue pm = void $ propagateData enqueue pm >>= waitForConversations
 
 -- | Asynchronously propagate data.
 propagateData
-    :: forall ctx m.
-       ( RelayWorkMode ctx m
-       , Message Void
-       )
-    => EnqueueMsg m
+    :: ( Message Void )
+    => EnqueueMsg
     -> PropagationMsg
-    -> m (Map NodeId (m ()))
+    -> IO (Map NodeId (IO ()))
 propagateData enqueue pm = case pm of
     InvReqDataPM msg key contents -> do
-        logDebug $ sformat
+        logger $ logDebug $ sformat
             ("Propagation data with key: "%build) key
         enqueue msg $ \peer _ ->
             pure $ Conversation $ (void <$> invReqDataFlowDo "propagation" key contents peer)
     DataOnlyPM msg contents -> do
-        logDebug $ sformat
+        logger $ logDebug $ sformat
             ("Propagation data: "%build) contents
         enqueue msg $ \__node _ ->
             pure $ Conversation $ doHandler contents
@@ -228,36 +209,32 @@ propagateData enqueue pm = case pm of
     doHandler
         :: contents1
         -> ConversationActions
-             (DataMsg contents1) Void m
-        -> m ()
+             (DataMsg contents1) Void
+        -> IO ()
     doHandler contents conv = send conv $ DataMsg contents
 
 handleInvDo
-    :: forall key ctx m .
-       ( RelayWorkMode ctx m
-       , Buildable key
-       )
-    => (key -> m Bool)
+    :: forall key.
+       ( Buildable key)
+    => (key -> IO Bool)
     -> key
-    -> m (Maybe key)
+    -> IO (Maybe key)
 handleInvDo handleInv imKey =
     ifM (handleInv imKey)
         (Just imKey <$ logUseful)
         (Nothing <$ logUseless)
   where
-    logUseless = logDebug $ sformat
+    logUseless = logger $ logDebug $ sformat
         ("Ignoring inv for key "%build%", because it's useless")
         imKey
-    logUseful = logDebug $ sformat
+    logUseful = logger $ logDebug $ sformat
         ("We'll request data for key "%build%", because it's useful")
         imKey
 
 relayListenersOne
-  :: forall pack ctx m.
-     ( RelayWorkMode ctx m
-     , Message Void
-     )
-  => OQ.OutboundQ pack NodeId Bucket -> EnqueueMsg m -> Relay m -> MkListeners m
+  :: forall pack.
+     ( Message Void )
+  => OQ.OutboundQ pack NodeId Bucket -> EnqueueMsg -> Relay -> MkListeners
 relayListenersOne oq enqueue (InvReqData mP irdP@InvReqDataParams{..}) =
     constantListeners $
     [handleReqL oq handleReq, invDataListener oq enqueue irdP] ++ handleMempoolL oq mP
@@ -266,31 +243,27 @@ relayListenersOne oq enqueue (Data DataParams{..}) =
     [handleDataOnlyL oq enqueue dataMsgType (handleDataOnly enqueue)]
 
 relayListeners
-  :: forall pack ctx m.
-     ( WithLogger m
-     , RelayWorkMode ctx m
-     , Message Void
-     )
-  => OQ.OutboundQ pack NodeId Bucket -> EnqueueMsg m -> [Relay m] -> MkListeners m
+  :: forall pack.
+     ( Message Void )
+  => OQ.OutboundQ pack NodeId Bucket -> EnqueueMsg -> [Relay] -> MkListeners
 relayListeners oq enqueue = mconcat . map (relayListenersOne oq enqueue)
 
 invDataListener
-  :: forall pack key contents ctx m.
-     ( RelayWorkMode ctx m
-     , Message (ReqOrRes key)
+  :: forall pack key contents.
+     ( Message (ReqOrRes key)
      , Message (InvOrData key contents)
      , Bi (ReqOrRes key)
      , Bi (InvOrData key contents)
      , Buildable contents
      , Buildable key
      , Eq key
-     , MessageLimited (DataMsg contents) m
+     , MessageLimited (DataMsg contents) IO
      , Message Void
      )
   => OQ.OutboundQ pack NodeId Bucket
-  -> EnqueueMsg m
-  -> InvReqDataParams key contents m
-  -> (ListenerSpec m, OutSpecs)
+  -> EnqueueMsg
+  -> InvReqDataParams key contents
+  -> (ListenerSpec, OutSpecs)
 invDataListener oq enqueue InvReqDataParams{..} = listenerConv oq $ \__ourVerInfo nodeId conv ->
     let handlingLoop = do
             inv' <- recvLimited conv
@@ -312,36 +285,35 @@ invDataListener oq enqueue InvReqDataParams{..} = listenerConv oq $ \__ourVerInf
                               -- And check data we are sent is what we expect (currently not)
     in handlingLoop
 
-relayPropagateOut :: Message Void => [Relay m] -> OutSpecs
+relayPropagateOut :: Message Void => [Relay] -> OutSpecs
 relayPropagateOut = mconcat . map propagateOutImpl
 
-propagateOutImpl :: Message Void => Relay m -> OutSpecs
+propagateOutImpl :: Message Void => Relay -> OutSpecs
 propagateOutImpl (InvReqData _ irdp) = toOutSpecs
       [ convH invProxy reqResProxy ]
   where
-    invProxy    = (const Proxy :: InvReqDataParams key contents m
+    invProxy    = (const Proxy :: InvReqDataParams key contents
                                -> Proxy (InvOrData key contents)) irdp
-    reqResProxy = (const Proxy :: InvReqDataParams key contents m
+    reqResProxy = (const Proxy :: InvReqDataParams key contents
                                -> Proxy (ReqOrRes key)) irdp
 propagateOutImpl (Data dp) = toOutSpecs
       [ convH dataProxy (Proxy @Void)
       ]
   where
-    dataProxy = (const Proxy :: DataParams contents m
-                            -> Proxy (DataMsg contents)) dp
+    dataProxy = (const Proxy :: DataParams contents
+                             -> Proxy (DataMsg contents)) dp
 
 invReqDataFlowDo
     :: ( Buildable key
-       , MinRelayWorkMode m
-       , MessageLimited (ReqOrRes key) m
+       , MessageLimited (ReqOrRes key) IO
        , Eq key
        )
     => Text
     -> key
     -> contents
     -> NodeId
-    -> ConversationActions (InvOrData key contents) (ReqOrRes key) m
-    -> m (Maybe (ResMsg key))
+    -> ConversationActions (InvOrData key contents) (ReqOrRes key)
+    -> IO (Maybe (ResMsg key))
 invReqDataFlowDo what key dt peer conv = do
     send conv $ Left $ InvMsg key
     it <- recvLimited conv
@@ -349,7 +321,7 @@ invReqDataFlowDo what key dt peer conv = do
   where
     replyWithData (Left (ReqMsg (Just key'))) = do
         -- Stop if the peer sends the wrong key. Basically a protocol error.
-        unless (key' == key) (throwM MismatchedKey)
+        unless (key' == key) (throwIO MismatchedKey)
         send conv $ Right $ DataMsg dt
         it <- recvLimited conv
         maybe handleD checkResponse it
@@ -357,38 +329,37 @@ invReqDataFlowDo what key dt peer conv = do
     replyWithData (Left (ReqMsg Nothing)) = return Nothing
     -- The peer sent a ResMsg where a ReqMsg was expected.
     replyWithData (Right (ResMsg _ _)) = do
-        logError $
+        logger $ logError $
             sformat ("InvReqDataFlow ("%stext%"): "%shown %" unexpected response")
                     what peer
-        throwM UnexpectedResponse
+        throwIO UnexpectedResponse
 
     checkResponse (Right resMsg) = return (Just resMsg)
     -- The peer sent a ReqMsg where a ResMsg was expected.
     checkResponse (Left (ReqMsg _)) = do
-        logError $
+        logger $ logError $
             sformat ("InvReqDataFlow ("%stext%"): "%shown %" unexpected request")
                     what peer
-        throwM UnexpectedRequest
+        throwIO UnexpectedRequest
 
     handleD = do
-        logError $
+        logger $ logError $
             sformat ("InvReqDataFlow ("%stext%"): "%shown %" closed conversation on \
                      \Inv key = "%build)
                     what peer key
-        throwM UnexpectedEnd
+        throwIO UnexpectedEnd
 
 dataFlow
-    :: forall contents m.
+    :: forall contents.
        ( Message (DataMsg contents)
        , Bi (DataMsg contents)
        , Buildable contents
-       , MinRelayWorkMode m
        , Message Void
        )
-    => Text -> EnqueueMsg m -> Msg -> contents -> m ()
+    => Text -> EnqueueMsg -> Msg -> contents -> IO ()
 dataFlow what enqueue msg dt = handleAny handleE $ do
     its <- enqueue msg $
-        \_ _ -> pure $ Conversation $ \(conv :: ConversationActions (DataMsg contents) Void m) ->
+        \_ _ -> pure $ Conversation $ \(conv :: ConversationActions (DataMsg contents) Void) ->
             send conv $ DataMsg dt
     void $ waitForConversations its
   where
@@ -399,7 +370,7 @@ dataFlow what enqueue msg dt = handleAny handleE $ do
     -- Fortunatelly, it's used only in auxx, so I don't care much.
     -- @gromak
     handleE e =
-        logWarning $
+        logger $ logWarning $
         sformat ("Error sending "%stext%", data = "%build%": "%shown)
                 what dt e
 
@@ -424,50 +395,48 @@ data InvReqDataFlowLog =
 $(deriveJSON defaultOptions ''InvReqDataFlowLog)
 
 invReqDataFlowTK
-    :: forall key contents m.
+    :: forall key contents.
        ( Message (InvOrData (Tagged contents key) contents)
        , Message (ReqOrRes (Tagged contents key))
        , Buildable key
        , Typeable contents
-       , MinRelayWorkMode m
        , Bi (InvOrData (Tagged contents key) contents)
        , Bi (ReqOrRes (Tagged contents key))
        , Eq key
        )
     => Text
-    -> EnqueueMsg m
+    -> EnqueueMsg
     -> Msg
     -> key
     -> contents
-    -> m (Map NodeId (Either SomeException (Maybe (ResMsg (Tagged contents key)))))
+    -> IO (Map NodeId (Either SomeException (Maybe (ResMsg (Tagged contents key)))))
 invReqDataFlowTK what enqueue msg key dt =
     invReqDataFlow what enqueue msg key' dt
   where
     contProxy = (const Proxy :: contents -> Proxy contents) dt
     key' = tagWith contProxy key
 
--- | Do an Inv/Req/Data/Res conversation (peers determined by the 'EnqueueMsg m'
+-- | Do an Inv/Req/Data/Res conversation (peers determined by the 'EnqueueMsg'
 -- argument) and wait for the results.
 -- This will wait for all conversations to finish. Exceptions in the conversations
 -- themselves are caught and returned as Left. If the peer did not ask for the
 -- data, then Right Nothing is given, otherwise their response to the data is
 -- given.
 invReqDataFlow
-    :: forall key contents m.
+    :: forall key contents.
        ( Message (InvOrData key contents)
        , Message (ReqOrRes key)
        , Bi (InvOrData key contents)
        , Bi (ReqOrRes key)
        , Buildable key
-       , MinRelayWorkMode m
        , Eq key
        )
     => Text
-    -> EnqueueMsg m
+    -> EnqueueMsg
     -> Msg
     -> key
     -> contents
-    -> m (Map NodeId (Either SomeException (Maybe (ResMsg key))))
+    -> IO (Map NodeId (Either SomeException (Maybe (ResMsg key))))
 invReqDataFlow what enqueue msg key dt = handleAny handleE $ do
     its <- enqueue msg $
         \addr _ -> pure $ Conversation $ invReqDataFlowDo what key dt addr
@@ -479,7 +448,7 @@ invReqDataFlow what enqueue msg key dt = handleAny handleE $ do
     -- Anyway, 'reportOrLog' is not used here, because exception is rethrown.
     -- @gromak
     handleE e = do
-        logWarning $
+        logger $ logWarning $
             sformat ("Error sending "%stext%", key = "%build%": "%shown)
                 what key e
-        throwM e
+        throwIO e

@@ -3,17 +3,20 @@ module Pos.Diffusion.Subscription.Dns
     ( dnsSubscriptionWorker
     ) where
 
+-- Why put MVars in a prelude? Weird.
+import           Universum hiding (newMVar)
+
+import           Control.Concurrent (threadDelay)
+import           Control.Concurrent.MVar (modifyMVar, newMVar)
+import           Control.Concurrent.Async (forConcurrently)
 import           Control.Exception (IOException)
 import           Data.Either (partitionEithers)
 import qualified Data.Map.Strict as M
 import           Data.Time.Units (Millisecond, Second, convertUnit)
 import           Formatting (int, sformat, shown, (%))
 import qualified Network.DNS as DNS
-import           System.Wlog (logError, logNotice, logWarning)
-import           Universum
+import           System.Wlog (LoggerNameBox, usingLoggerName, logError, logNotice, logWarning)
 
-import           Mockable (Concurrently, Delay, Mockable, SharedAtomic, SharedAtomicT, delay,
-                           forConcurrently, modifySharedAtomic, newSharedAtomic)
 import qualified Network.Broadcast.OutboundQueue as OQ
 import           Network.Broadcast.OutboundQueue.Types (Alts, peersFromList)
 
@@ -24,20 +27,19 @@ import           Pos.Network.Types (Bucket (..), DnsDomains (..), NetworkConfig 
                                     NodeType (..), resolveDnsDomains)
 import           Pos.Util.Timer (Timer)
 
+logger :: LoggerNameBox IO t -> IO t
+logger = usingLoggerName "dns-subscription"
+
 dnsSubscriptionWorker
-    :: forall pack kademlia m.
-     ( SubscriptionMode m
-     , Mockable Delay m
-     , Mockable SharedAtomic m
-     , Mockable Concurrently m
-     )
+    :: forall pack kademlia.
+     ( SubscriptionMode )
     => OQ.OutboundQ pack NodeId Bucket
     -> NetworkConfig kademlia
     -> DnsDomains DNS.Domain
     -> Timer
-    -> m Millisecond
-    -> SendActions m
-    -> m ()
+    -> IO Millisecond
+    -> SendActions
+    -> IO ()
 dnsSubscriptionWorker oq networkCfg DnsDomains{..} keepaliveTimer nextSlotDuration sendActions = do
     -- Shared state between the threads which do subscriptions.
     -- It's a 'Map Int (Alts NodeId)' used to determine the current
@@ -46,16 +48,16 @@ dnsSubscriptionWorker oq networkCfg DnsDomains{..} keepaliveTimer nextSlotDurati
     -- that the threads don't erase each-others' work.
     let initialDnsPeers :: Map Int (Alts NodeId)
         initialDnsPeers = M.fromList $ map (\(i, _) -> (i, [])) allOf
-    dnsPeersVar <- newSharedAtomic initialDnsPeers
+    dnsPeersVar <- newMVar initialDnsPeers
     -- There's a thread for each conjunct which attempts to subscribe to one of
     -- the alternatives.
     -- This gives valency and fallbacks implicitly, just as for static
     -- routes. Valency is the length of the outer list (conjuncts) and
     -- fallbacks (for a given outer list element) is the length of the inner
     -- list (disjuncts).
-    logNotice $ sformat ("dnsSubscriptionWorker: valency "%int) (length allOf)
+    logger $ logNotice $ sformat ("dnsSubscriptionWorker: valency "%int) (length allOf)
     void $ forConcurrently allOf (subscribeAlts dnsPeersVar)
-    logNotice $ sformat ("dnsSubscriptionWorker: all "%int%" threads finished") (length allOf)
+    logger $ logNotice $ sformat ("dnsSubscriptionWorker: all "%int%" threads finished") (length allOf)
   where
 
     allOf :: [(Int, Alts (NodeAddr DNS.Domain))]
@@ -67,11 +69,11 @@ dnsSubscriptionWorker oq networkCfg DnsDomains{..} keepaliveTimer nextSlotDurati
     -- because all subscriptions to have failed), wait a while before retrying
     -- (see 'retryInterval').
     subscribeAlts
-        :: SharedAtomicT m (Map Int (Alts NodeId))
+        :: MVar (Map Int (Alts NodeId))
         -> (Int, Alts (NodeAddr DNS.Domain))
-        -> m ()
+        -> IO ()
     subscribeAlts _ (index, []) =
-        logWarning $ sformat ("dnsSubscriptionWorker: no alternatives given for index "%int) index
+        logger $ logWarning $ sformat ("dnsSubscriptionWorker: no alternatives given for index "%int) index
     subscribeAlts dnsPeersVar (index, alts) = do
         -- Any DNSError is squelched. So are IOExceptions, for good measure.
         -- This does not include async exceptions.
@@ -81,12 +83,12 @@ dnsSubscriptionWorker oq networkCfg DnsDomains{..} keepaliveTimer nextSlotDurati
         findAndSubscribe dnsPeersVar index alts
             `catch` logDNSError
             `catch` logIOException
-        retryInterval >>= delay
+        retryInterval >>= threadDelay . (* 1000) . fromIntegral
         subscribeAlts dnsPeersVar (index, alts)
 
     -- Subscribe to all alternatives, one-at-a-time, until the list is
     -- exhausted.
-    subscribeToOne :: Alts NodeId -> m ()
+    subscribeToOne :: Alts NodeId -> IO ()
     subscribeToOne dnsPeers = case dnsPeers of
         [] -> return ()
         (peer:peers) -> do
@@ -95,46 +97,46 @@ dnsSubscriptionWorker oq networkCfg DnsDomains{..} keepaliveTimer nextSlotDurati
 
     -- Resolve a name and subscribe to the node(s) at the addresses.
     findAndSubscribe
-        :: SharedAtomicT m (Map Int (Alts NodeId))
+        :: MVar (Map Int (Alts NodeId))
         -> Int
         -> Alts (NodeAddr DNS.Domain)
-        -> m ()
+        -> IO ()
     findAndSubscribe dnsPeersVar index alts = do
         -- Resolve all of the names and update the known peers in the queue.
         dnsPeersList <- findDnsPeers index alts
-        modifySharedAtomic dnsPeersVar $ \dnsPeers -> do
+        modifyMVar dnsPeersVar $ \dnsPeers -> do
             let dnsPeers' = M.insert index dnsPeersList dnsPeers
-            void $ liftIO $ OQ.updatePeersBucket oq BucketBehindNatWorker $ \_ ->
+            void $ OQ.updatePeersBucket oq BucketBehindNatWorker $ \_ ->
                 peersFromList mempty ((,) NodeRelay <$> M.elems dnsPeers')
             pure (dnsPeers', ())
         -- Try to subscribe to some peer.
         -- If they all fail, wait a while before trying again.
         subscribeToOne dnsPeersList
 
-    logIOException :: IOException -> m ()
+    logIOException :: IOException -> IO ()
     logIOException ioException =
-        logError $ sformat ("dnsSubscriptionWorker: "%shown) ioException
+        logger $ logError $ sformat ("dnsSubscriptionWorker: "%shown) ioException
 
-    logDNSError :: DNS.DNSError -> m ()
+    logDNSError :: DNS.DNSError -> IO ()
     logDNSError dnsError =
-        logError $ sformat ("dnsSubscriptionWorker: "%shown) dnsError
+        logger $ logError $ sformat ("dnsSubscriptionWorker: "%shown) dnsError
 
     -- Find peers via DNS, preserving order.
     -- In case multiple addresses are returned for one name, they're flattened
     -- and we forget the boundaries, but all of the addresses for a given name
     -- are adjacent.
-    findDnsPeers :: Int -> Alts (NodeAddr DNS.Domain) -> m (Alts NodeId)
+    findDnsPeers :: Int -> Alts (NodeAddr DNS.Domain) -> IO (Alts NodeId)
     findDnsPeers index alts = do
-        mNodeIds <- liftIO $ resolveDnsDomains networkCfg alts
+        mNodeIds <- resolveDnsDomains networkCfg alts
         let (errs, nids_) = partitionEithers mNodeIds
             nids = mconcat nids_
-        when (null nids)       $ logError (msgNoRelays index)
-        when (not (null errs)) $ logError (msgDnsFailure index errs)
+        when (null nids)       $ logger $ logError (msgNoRelays index)
+        when (not (null errs)) $ logger $ logError (msgDnsFailure index errs)
         return nids
 
     -- How long to wait before retrying in case no alternative can be
     -- subscribed to.
-    retryInterval :: m Millisecond
+    retryInterval :: IO Millisecond
     retryInterval = do
         slotDur <- nextSlotDuration
         pure $ max (slotDur `div` 4) (convertUnit (5 :: Second))

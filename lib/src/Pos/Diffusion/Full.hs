@@ -79,7 +79,7 @@ import           Pos.Util.Timer (Timer, newTimer)
 -- work to juggle the instances.
 diffusionLayerFull
     :: forall d m x .
-       ( DiffusionWorkMode d
+       ( DiffusionWorkMode
        , MonadFix d
        , MonadIO m
        , MonadMask m
@@ -269,8 +269,8 @@ diffusionLayerFull runIO networkConfig lastKnownBlockVersion transport mEkgNodeM
                       -> d (OldestFirst [] Block)
             getBlocks = Diffusion.Block.getBlocks logic enqueue
 
-            requestTip :: (BlockHeader -> NodeId -> d t) -> d (Map NodeId (d t))
-            requestTip = Diffusion.Block.requestTip enqueue
+            requestTips :: d (Map NodeId (d BlockHeader))
+            requestTips = Diffusion.Block.requestTip enqueue
 
             announceBlockHeader :: MainBlockHeader -> d ()
             announceBlockHeader = void . Diffusion.Block.announceBlockHeader logic enqueue
@@ -328,7 +328,7 @@ diffusionLayerFull runIO networkConfig lastKnownBlockVersion transport mEkgNodeM
 -- dequeue thread.
 runDiffusionLayerFull
     :: forall d x .
-       ( DiffusionWorkMode d, MonadFix d )
+       ( DiffusionWorkMode, MonadFix d )
     => (forall y . d y -> IO y)
     -> NetworkConfig KademliaParams
     -> Transport d
@@ -400,7 +400,7 @@ sendMsgFromConverse runIO converse (EnqueuedConversation (_, k)) nodeId =
 -- | Bring up a time-warp node. It will come down when the continuation ends.
 timeWarpNode
     :: forall d t .
-       ( DiffusionWorkMode d, MonadFix d )
+       ( DiffusionWorkMode, MonadFix d )
     => Transport d
     -> VerInfo
     -> (VerInfo -> [Listener d])
@@ -477,7 +477,7 @@ bracketKademlia nc@NetworkConfig {..} action = case ncTopology of
 
 -- | Synchronously join the Kademlia network.
 joinKademlia
-    :: ( DiffusionWorkMode m )
+    :: ( DiffusionWorkMode )
     => NetworkConfig KademliaDHTInstance
     -> m ()
 joinKademlia networkConfig = case topologyRunKademlia (ncTopology networkConfig) of

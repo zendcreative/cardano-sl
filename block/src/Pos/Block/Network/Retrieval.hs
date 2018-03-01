@@ -21,12 +21,10 @@ import           System.Wlog (logDebug, logError, logInfo, logWarning)
 
 import           Pos.Block.BlockWorkMode (BlockWorkMode)
 import           Pos.Block.Logic (ClassifyHeaderRes (..), classifyNewHeader, getHeadersOlderExp)
-import           Pos.Block.Network.Logic (BlockNetLogicException (DialogUnexpected), handleBlocks,
-                                          triggerRecovery)
-import           Pos.Block.Network.Types (MsgBlock (..), MsgGetBlocks (..))
+import           Pos.Block.Network.Logic (handleBlocks, triggerRecovery)
 import           Pos.Block.RetrievalQueue (BlockRetrievalQueueTag, BlockRetrievalTask (..))
 import           Pos.Block.Types (RecoveryHeaderTag)
-import           Pos.Communication.Protocol (NodeId, OutSpecs, convH, toOutSpecs)
+import           Pos.Communication.Protocol (NodeId, OutSpecs)
 import           Pos.Core (Block, HasHeaderHash (..), HeaderHash, difficultyL, isMoreDifficult)
 import           Pos.Core.Block (BlockHeader)
 import           Pos.Crypto (shortHashF)
@@ -42,11 +40,7 @@ retrievalWorker
     :: forall ctx m.
        (BlockWorkMode ctx m)
     => (WorkerSpec m, OutSpecs)
-retrievalWorker = worker outs retrievalWorkerImpl
-  where
-    outs = toOutSpecs [convH (Proxy :: Proxy MsgGetBlocks)
-                             (Proxy :: Proxy MsgBlock)
-                      ]
+retrievalWorker = worker mempty retrievalWorkerImpl
 
 -- I really don't like join
 {-# ANN retrievalWorkerImpl ("HLint: ignore Use join" :: Text) #-}
@@ -161,13 +155,18 @@ retrievalWorkerImpl diffusion =
     handleRecovery nodeId rHeader = do
         logDebug "Block retrieval queue is empty and we're in recovery mode,\
                  \ so we will fetch more blocks"
-        whenM (fmap isJust $ DB.getHeader $ headerHash rHeader) $
-            -- How did we even got into recovery then?
-            throwM $ DialogUnexpected $ "handleRecovery: recovery header is " <>
-                                        "already present in db"
-        logDebug "handleRecovery: fetching blocks"
-        checkpoints <- toList <$> getHeadersOlderExp Nothing
-        void $ getProcessBlocks diffusion nodeId rHeader checkpoints
+        alreadyHave <- fmap isJust $ DB.getHeader $ headerHash rHeader
+        if alreadyHave
+        then -- Original comment: how did we even got into recovery then?
+             -- It's not exactly clear whether this case is an error.
+             -- Could the DB have changed in the mean-time? There's simply too
+             -- much complexity here. We used to throw an exception, now we
+             -- just log.
+             logError $ "handleRecovery: recovery header is already present in db"
+        else do 
+            logDebug "handleRecovery: fetching blocks"
+            checkpoints <- toList <$> getHeadersOlderExp Nothing
+            void $ getProcessBlocks diffusion nodeId rHeader checkpoints
 
 ----------------------------------------------------------------------------
 -- Entering and exiting recovery mode
@@ -286,13 +285,13 @@ getProcessBlocks diffusion nodeId desired checkpoints = do
           let msg = sformat ("getProcessBlocks: diffusion returned []"%
                              " on request to fetch "%shortHashF%" from peer "%build)
                             (headerHash desired) nodeId
-          throwM $ DialogUnexpected msg
+          logError msg
       Just (blocks :: OldestFirst NE Block) -> do
           recHeaderVar <- view (lensOf @RecoveryHeaderTag)
           logDebug $ sformat
               ("Retrieved "%int%" blocks")
               (blocks ^. _OldestFirst . to NE.length)
-          handleBlocks nodeId blocks diffusion 
+          handleBlocks diffusion nodeId blocks
           -- If we've downloaded any block with bigger
           -- difficulty than ncRecoveryHeader, we're
           -- gracefully exiting recovery mode.

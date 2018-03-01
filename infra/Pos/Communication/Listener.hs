@@ -7,7 +7,6 @@ module Pos.Communication.Listener
        ) where
 
 import qualified Node as N
-import           System.Wlog (WithLogger)
 import           Universum
 
 import qualified Network.Broadcast.OutboundQueue as OQ
@@ -22,24 +21,22 @@ import           Pos.Network.Types (Bucket)
 -- TODO automatically provide a 'recvLimited' here by using the
 -- 'MessageLimited'?
 listenerConv
-    :: forall snd rcv pack m .
+    :: forall snd rcv pack .
        ( Bi snd
        , Bi rcv
        , Message snd
        , Message rcv
-       , WithLogger m
-       , MonadIO m
        )
     => OQ.OutboundQ pack NodeId Bucket
-    -> (VerInfo -> NodeId -> ConversationActions snd rcv m -> m ())
-    -> (ListenerSpec m, OutSpecs)
+    -> (VerInfo -> NodeId -> ConversationActions snd rcv -> IO ())
+    -> (ListenerSpec, OutSpecs)
 listenerConv oq h = (lspec, mempty)
   where
     spec = (rcvMsgCode, ConvHandler sndMsgCode)
     lspec =
       flip ListenerSpec spec $ \ourVerInfo ->
           N.Listener $ \peerVerInfo' nNodeId conv -> checkProtocolMagic ourVerInfo peerVerInfo' $ do
-              liftIO $ OQ.clearFailureOf oq nNodeId
+              OQ.clearFailureOf oq nNodeId
               checkingInSpecs ourVerInfo peerVerInfo' spec nNodeId $
                   h ourVerInfo nNodeId conv
 

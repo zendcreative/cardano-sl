@@ -117,6 +117,7 @@ executable discovery
                       , bytestring
                       , cardano-sl-networking
                       , containers
+                      , network-transport
                       , network-transport-tcp
                       , random
                       , safe-exceptions
@@ -135,9 +136,11 @@ executable discovery
 executable ping-pong
   main-is:             PingPong.hs
   build-depends:       base >= 4.8 && < 5
+                     , async
                      , binary
                      , bytestring
                      , cardano-sl-networking
+                     , network-transport
                      , network-transport-tcp
                      , random
                      , safe-exceptions

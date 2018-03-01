@@ -4,6 +4,7 @@
 module Pos.Diffusion.Types
     ( DiffusionLayer (..)
     , Diffusion (..)
+    , hoistDiffusion
     , dummyDiffusionLayer
     ) where
 
@@ -29,12 +30,11 @@ data Diffusion m = Diffusion
                          -> BlockHeader
                          -> [HeaderHash]
                          -> m (OldestFirst [] Block)
-      -- | This is needed because there's a security worker which will request
-      -- tip-of-chain from the network if it determines it's very far behind.
-      -- This type is chosen so that it fits with the current implementation:
-      -- for each header received, dump it into the block retrieval queue and
-      -- let the retrieval worker figure out all the recovery mode business.
-    , requestTip         :: forall t . (BlockHeader -> NodeId -> m t) -> m (Map NodeId (m t))
+      -- | Request tip-of-chain from peers.
+      -- Each value in the map will block until the header has been received.
+      -- In IO treatments, one would probably throw an IO exception in case it
+      -- could not be retrieved.
+    , requestTips        :: m (Map NodeId (m BlockHeader))
       -- | Announce a block header.
     , announceBlockHeader :: MainBlockHeader -> m ()
       -- | Returns a Bool iff at least one peer accepted the transaction.
@@ -77,6 +77,23 @@ data DiffusionLayer m = DiffusionLayer
     , diffusion         :: Diffusion m
     }
 
+hoistDiffusion :: Functor m => (forall t . m t -> n t) -> Diffusion m -> Diffusion n
+hoistDiffusion nat orig = Diffusion
+    { getBlocks = \nid bh hs -> nat $ getBlocks orig nid bh hs
+    , requestTips = nat $ (fmap . fmap) nat (requestTips orig)
+    , announceBlockHeader = nat . announceBlockHeader orig
+    , sendTx = nat . sendTx orig
+    , sendUpdateProposal = \upid upp upvs -> nat $ sendUpdateProposal orig upid upp upvs
+    , sendVote = nat . sendVote orig
+    , sendSscCert = nat . sendSscCert orig
+    , sendSscOpening = nat . sendSscOpening orig
+    , sendSscShares = nat . sendSscShares orig
+    , sendSscCommitment = nat . sendSscCommitment orig
+    , sendPskHeavy = nat . sendPskHeavy orig
+    , healthStatus = nat $ healthStatus orig
+    , formatPeers = \fmt -> nat $ formatPeers orig fmt
+    }
+
 -- | A diffusion layer that does nothing.
 dummyDiffusionLayer :: Applicative m => DiffusionLayer m
 dummyDiffusionLayer = DiffusionLayer
@@ -87,7 +104,7 @@ dummyDiffusionLayer = DiffusionLayer
     dummyDiffusion :: Applicative m => Diffusion m
     dummyDiffusion = Diffusion
         { getBlocks          = \_ _ _ -> pure (OldestFirst [])
-        , requestTip         = \_ -> pure mempty
+        , requestTips        = pure mempty
         , announceBlockHeader = \_ -> pure ()
         , sendTx             = \_ -> pure True
         , sendUpdateProposal = \_ _ _ -> pure ()

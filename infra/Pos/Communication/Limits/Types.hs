@@ -93,7 +93,7 @@ instance Applicative m => MessageLimited Bool m where
 --   many bytes. If more than that many bytes come in before a parse then
 --   an exception is raised.
 recvLimited
-    :: forall rcv snd m .
-       ( Monad m, MessageLimited rcv m )
-    => ConversationActions snd rcv m -> m (Maybe rcv)
+    :: forall rcv snd .
+       ( MessageLimited rcv IO )
+    => ConversationActions snd rcv -> IO (Maybe rcv)
 recvLimited conv = getMsgLenLimit (Proxy @rcv) >>= recv conv . getLimit

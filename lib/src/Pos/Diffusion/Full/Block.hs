@@ -4,7 +4,7 @@
 
 module Pos.Diffusion.Full.Block
     ( getBlocks
-    , requestTip
+    , requestTips
     , announceBlockHeader
     , handleHeadersCommunication
 
@@ -274,15 +274,14 @@ getBlocks logic enqueue nodeId tipHeader checkpoints = do
               Just (MsgBlock block) -> do
                   retrieveBlocksDo conv (i - 1) (block : acc)
 
-requestTip
+requestTips
     :: forall d t .
        ( DiffusionWorkMode d
        , HasAdoptedBlockVersionData d
        )
     => EnqueueMsg d
-    -> (BlockHeader -> NodeId -> d t)
-    -> d (Map NodeId (d t))
-requestTip enqueue k = enqueue (MsgRequestBlockHeaders Nothing) $ \nodeId _ -> pure . Conversation $
+    -> d (Map NodeId (d BlockHeader))
+requestTips enqueue = enqueue (MsgRequestBlockHeaders Nothing) $ \nodeId _ -> pure . Conversation $
     \(conv :: ConversationActions MsgGetHeaders MsgHeaders m) -> do
         logDebug "Requesting tip..."
         send conv (MsgGetHeaders [] Nothing)
@@ -293,9 +292,9 @@ requestTip enqueue k = enqueue (MsgRequestBlockHeaders Nothing) $ \nodeId _ -> p
   where
     handleTip nodeId (MsgHeaders (NewestFirst (tip:|[]))) = do
         logDebug $ sformat ("Got tip "%shortHashF%", processing") (headerHash tip)
-        k tip nodeId
+        pure tip
     handleTip _ t = do
-        logWarning $ sformat ("requestTip: got enexpected response: "%shown) t
+        logWarning $ sformat ("requestTips: got enexpected response: "%shown) t
         throwM $ DialogUnexpected "peer sent more than one tip"
 
 -- | Announce a block header.

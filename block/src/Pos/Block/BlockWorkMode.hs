@@ -3,25 +3,28 @@
 -- | Various constraints needed for block processing.
 
 module Pos.Block.BlockWorkMode
-    ( BlockInstancesConstraint
-    , BlockWorkMode
+    ( BlockWorkMode
     ) where
-
-import           Universum
 
 import           Data.Default (Default)
 import           Mockable (Delay, Mockables, SharedAtomic)
 import           System.Wlog (WithLogger)
 
+{-
 import           Pos.Binary.Class (Bi)
+-}
 import           Pos.Block.Configuration (HasBlockConfiguration)
+{-
 import           Pos.Block.Network.Types (MsgBlock, MsgGetBlocks, MsgGetHeaders, MsgHeaders)
+-}
 import           Pos.Block.RetrievalQueue (BlockRetrievalQueue, BlockRetrievalQueueTag)
 import           Pos.Block.Slog (HasSlogContext)
 import           Pos.Block.Types (LastKnownHeader, LastKnownHeaderTag, RecoveryHeader,
                                   RecoveryHeaderTag)
+{-
 import           Pos.Communication.Limits.Types (MessageLimited)
 import           Pos.Communication.Protocol (Message)
+-}
 import           Pos.Core.Context (HasPrimaryKey)
 import           Pos.Lrc (LrcModeFull)
 import           Pos.Recovery.Info (MonadRecoveryInfo)
@@ -33,11 +36,14 @@ import           Pos.Update.Context (UpdateContext)
 import           Pos.Util.TimeWarp (CanJsonLog)
 import           Pos.Util.Util (HasLens, HasLens')
 
+{-
 -- | These instances are implemented in @Pos.Binary.Communication@,
 -- @Pos.Communication.Message@ and @Pos.Communication.Limits@, which
 -- are unavailable at this point, hence we defer providing them
 -- to the calling site.
-type BlockInstancesConstraint m =
+--
+-- FIXME belongs in diffusion layer full.
+type BlockInstancesConstraint =
     ( Each '[Bi]
         [ MsgGetHeaders
         , MsgHeaders
@@ -48,17 +54,16 @@ type BlockInstancesConstraint m =
         , MsgHeaders
         , MsgGetBlocks
         , MsgBlock ]
-    , MessageLimited MsgGetHeaders m
-    , MessageLimited MsgHeaders m
-    , MessageLimited MsgGetBlocks m
-    , MessageLimited MsgBlock m
+    , MessageLimited MsgGetHeaders IO
+    , MessageLimited MsgHeaders IO
+    , MessageLimited MsgGetBlocks IO
+    , MessageLimited MsgBlock IO
     )
+-}
 
 -- | A subset of @WorkMode@.
 type BlockWorkMode ctx m =
-    ( BlockInstancesConstraint m
-
-    , Default (MempoolExt m)
+    ( Default (MempoolExt m)
     , Mockables m [Delay, SharedAtomic]
 
     , LrcModeFull ctx m
