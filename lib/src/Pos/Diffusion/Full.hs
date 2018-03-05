@@ -24,7 +24,7 @@ import           Node.Conversation (Converse, converseWith, Conversation)
 import           System.Random (newStdGen)
 import           System.Wlog (WithLogger, CanLog, usingLoggerName)
 
-import           Pos.Block.Network (MsgGetHeaders, MsgHeaders, MsgGetBlocks, MsgBlock)
+import           Pos.Block.Network (MsgGetHeaders, MsgHeaders, MsgGetBlocks, MsgBlock, MsgStream)
 import           Pos.Communication (NodeId, VerInfo (..), PeerData, PackingType,
                                     EnqueueMsg, makeEnqueueMsg, bipPacking, Listener,
                                     MkListeners (..), HandlerSpecs, InSpecs (..),
@@ -175,11 +175,15 @@ diffusionLayerFull networkConfig lastKnownBlockVersion transport mEkgNodeMetrics
                 , announceBlockHeaderOuts <> toOutSpecs [ convH (Proxy :: Proxy MsgGetBlocks)
                                                                 (Proxy :: Proxy MsgBlock)
                                                         ]
+                , streamBlockHeaderOuts
                 ]
 
             announceBlockHeaderOuts = toOutSpecs [ convH (Proxy :: Proxy MsgHeaders)
                                                          (Proxy :: Proxy MsgGetHeaders)
                                                  ]
+            streamBlockHeaderOuts = toOutSpecs [ convH (Proxy :: Proxy MsgStream)
+                                                       (Proxy :: Proxy MsgBlock)
+                                               ]
 
             -- Plainly mempty from the definition of allWorkers.
             slottingWorkerOutSpecs = mempty

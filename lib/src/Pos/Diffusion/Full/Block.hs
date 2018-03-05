@@ -24,14 +24,14 @@ import qualified Data.Text.Buildable as B
 import           Data.Time.Units (toMicroseconds, fromMicroseconds)
 import           Formatting (bprint, build, int, sformat, shown, stext, (%))
 import qualified Network.Broadcast.OutboundQueue as OQ
-import           Mockable.Concurrent (fork)
 import           Serokell.Util.Text (listJson)
 import           System.Wlog (logDebug, logWarning)
 
 import           Pos.Binary.Communication ()
 import           Pos.Block.Configuration (recoveryHeadersMessage)
 import           Pos.Block.Network (MsgBlock (..), MsgGetBlocks (..), MsgGetHeaders (..),
-                                    MsgHeaders (..))
+                                    MsgHeaders (..), MsgStreamStart (..), MsgStreamUpdate (..),
+                                    MsgStream (..))
 import           Pos.Communication.Limits (HasAdoptedBlockVersionData, recvLimited)
 import           Pos.Communication.Listener (listenerConv)
 import           Pos.Communication.Message ()
@@ -291,75 +291,72 @@ streamBlocks
     -> (Conc.TBQueue StreamEntry -> d t)
     -> d t
 streamBlocks _ enqueue nodeId tipHeader _ k = do
-    blockChan <- atomically $ Conc.newTBQueue $ fromIntegral segmentSize
-    -- XXX Implement support for fetching a list of BlockHeaders too.
-    requestBlocks blockChan (NewestFirst (one tipHeader))
+    blockChan <- atomically $ Conc.newTBQueue $ fromIntegral windowSize
+    requestBlocks blockChan (OldestFirst (one tipHeader))
     k blockChan
   where
 
     -- | Make message which requests chain of blocks which is based on our
     -- tip. LcaChild is the first block after LCA we don't
     -- know. WantedBlock is the newest one we want to get.
-    mkBlocksRequest :: HeaderHash -> HeaderHash -> MsgGetBlocks
-    mkBlocksRequest lcaChild wantedBlock =
-        MsgGetBlocks
-        { mgbFrom = lcaChild
-        , mgbTo = wantedBlock
+    mkStreamStart :: HeaderHash -> HeaderHash -> MsgStream
+    mkStreamStart lcaChild wantedBlock =
+        MsgStart $ MsgStreamStart
+        { mssFrom = lcaChild
+        , mssTo = wantedBlock
+        , mssWindow = 128 -- XXX
         }
 
-    requestBlocks :: Conc.TBQueue StreamEntry -> NewestFirst NE BlockHeader -> d ()
+    requestBlocks :: Conc.TBQueue StreamEntry -> OldestFirst NE BlockHeader -> d ()
     requestBlocks blockChan headers = enqueueMsgSingle
         enqueue
         (MsgRequestBlocks (S.singleton nodeId))
         (Conversation $ requestBlocksConversation blockChan headers)
 
-    segmentSize = 64 :: Word -- XXX
+    windowSize = 128 :: Word32 -- XXX
 
     requestBlocksConversation
         :: Conc.TBQueue StreamEntry
-        -> NewestFirst NE BlockHeader
-        -> ConversationActions MsgGetBlocks MsgBlock d
+        -> OldestFirst NE BlockHeader
+        -> ConversationActions MsgStream MsgBlock d
         -> d ()
     requestBlocksConversation blockChan headers conv = do
-        -- Preserved behaviour from existing logic code: all of the headers
-        -- except for the first and last are tossed away.
-        -- TODO don't be so wasteful [CSL-2148]
-        let headers' = toOldestFirst headers
-        let segs = segmentsOfSize segmentSize $ headers' ^. _OldestFirst
-        _ <- fork (retrieveBlocks blockChan conv segs 0)
+        let oldestHeader = headers ^. _OldestFirst . _neHead
+            newestHeader = headers ^. _OldestFirst . _neLast
+            lcaChild = oldestHeader
+            newestHash = headerHash newestHeader
+            lcaChildHash = headerHash lcaChild
+
+        send conv $ mkStreamStart lcaChildHash newestHash
+        retrieveBlocks blockChan conv windowSize
+
         return ()
 
     -- A piece of the block retrieval conversation in which the blocks are
     -- pulled in one-by-one.
     retrieveBlocks
         :: Conc.TBQueue StreamEntry
-        -> ConversationActions MsgGetBlocks MsgBlock d
-        -> [(BlockHeader, BlockHeader)]
-        -> Word
+        -> ConversationActions MsgStream MsgBlock d
+        -> Word32
         -> d ()
-    retrieveBlocks blockChan _ [] 0 = do
+    retrieveBlocks blockChan _ 0 = do
+        -- XXX Not used, do we need to handle 'end-of-stream'?
         atomically $ Conc.writeTBQueue blockChan StreamEnd
         return ()
-    retrieveBlocks blockChan conv [] outStandingReq = do
-        block <- retrieveBlock conv
-        atomically $ Conc.writeTBQueue blockChan (StreamBlock block)
-        retrieveBlocks blockChan conv [] (outStandingReq - 1)
-    retrieveBlocks blockChan conv (seg:segs) outStandingReq = do
-        (segs',osq) <- if outStandingReq < segmentSize `div` 2
+    retrieveBlocks blockChan conv window = do
+        window' <- if window < windowSize `div` 2
                           then do
-                              let (oldestHeader, newestHeader) = seg
-                                  newestHash = headerHash newestHeader
-                                  lcaChildHash = headerHash oldestHeader
-                              logDebug $ sformat ("Requesting blocks from "%shortHashF%" to "%shortHashF) lcaChildHash newestHash
-                              send conv $ mkBlocksRequest lcaChildHash newestHash
-                              return $ (NE.tail (seg :| segs), outStandingReq + segmentSize - 1)
-                    else return (segs, outStandingReq - 1)
+                              let w' = window + windowSize
+                              logDebug $ sformat ("Updating Window: "%int%" to "%int) window w'
+                              send conv $ MsgUpdate $ MsgStreamUpdate $ w'
+                              return w'
+                    else return $ window - 1
         block <- retrieveBlock conv
         atomically $ Conc.writeTBQueue blockChan (StreamBlock block)
-        retrieveBlocks blockChan conv segs' osq
+        retrieveBlocks blockChan conv window'
 
     retrieveBlock
-        :: ConversationActions MsgGetBlocks MsgBlock d
+        :: ConversationActions MsgStream MsgBlock d
         -> d Block
     retrieveBlock conv = do
         chainE <- runExceptT (retrieveBlockDo conv)
@@ -379,7 +376,7 @@ streamBlocks _ enqueue nodeId tipHeader _ k = do
     -- (presumably the server sends them oldest first, as that assumption was
     -- required for the old version to correctly say OldestFirst).
     retrieveBlockDo
-        :: ConversationActions MsgGetBlocks MsgBlock d
+        :: ConversationActions MsgStream MsgBlock d
         -> ExceptT Text d Block
     retrieveBlockDo conv = lift (recvLimited conv) >>= \case
               Nothing ->
@@ -388,26 +385,6 @@ streamBlocks _ enqueue nodeId tipHeader _ k = do
                   throwError $ sformat ("Peer failed to produce block, "%stext) t
               Just (MsgBlock block) -> return block
 
-
--- | Get the element at a given index (0-indexed) and the remainder of the
--- list. If the index is bigger than the list, you get the last element and [].
-takeAtNE :: Word -> NonEmpty a -> (a, [a])
-takeAtNE 0 (a :| rest)       = (a, rest)
-takeAtNE _ (a :| [])         = (a, [])
-takeAtNE n (_ :| (a : rest)) = takeAtNE (n-1) (a :| rest)
-
--- | takeAtNE but give the first element as well.
-takeAtFirstNE :: Word -> NonEmpty a -> (a, a, [a])
-takeAtFirstNE until (a :| rest) =
-    let (a', as) = takeAtNE until (a :| rest)
-    in  (a, a', as)
-
-segmentsOfSize :: Word -> NonEmpty a -> [(a, a)]
-segmentsOfSize n ne = (first_, last) : case rest of
-    [] -> []
-    (x : xs) -> segmentsOfSize n (x :| xs)
-  where
-    (first_, last, rest) = takeAtFirstNE n ne
 
 requestTip
     :: forall d t .
@@ -554,6 +531,7 @@ blockListeners logic oq keepaliveTimer = constantListeners $
     , handleGetBlocks logic oq
       -- Peer has a block header for us (yes, singular only).
     , handleBlockHeaders logic oq keepaliveTimer
+    , handleStreamStart logic oq
     ]
 
 ----------------------------------------------------------------------------
@@ -615,6 +593,60 @@ handleGetBlocks logic oq = listenerConv oq $ \__ourVerInfo nodeId conv -> do
         throwM $ DBMalformed $
         "handleGetBlocks: getHashesRange returned header that doesn't " <>
         "have corresponding block in storage."
+
+handleStreamStart
+    :: forall pack m.
+       ( DiffusionWorkMode m )
+    => Logic m
+    -> OQ.OutboundQ pack NodeId Bucket
+    -> (ListenerSpec m, OutSpecs)
+handleStreamStart logic oq = listenerConv oq $ \__ourVerInfo nodeId conv -> do
+    msMsg <- recvLimited conv
+    whenJust msMsg $ \ms -> do
+        case ms of
+             MsgStart s -> stream nodeId conv (mssFrom s) (mssTo s) (mssWindow s)
+             MsgUpdate _ -> do
+                 send conv $ MsgNoBlock ("MsgUpdate without MsgStreamStart")
+                 logDebug "handleStreamStart without MsgStreamStart"
+                 return ()
+
+  where
+    stream nodeId conv from to_ window = do
+        hashesM <- getHashesRange logic (Just recoveryHeadersMessage) from to_
+        case hashesM of
+             Right hashes -> do
+                 logDebug $ sformat ("handleStreamStart: started sending "%int%
+                                     " blocks to "%build%" one-by-one: "%listJson)
+                                    (length hashes) nodeId hashes
+                 loop nodeId conv (toList hashes) window
+             Left e -> logWarning $ "getBlocksByHeaders@retrieveHeaders returned error: " <> show e
+
+    loop _ _ [] _ = return ()
+    loop nodeId conv hashes  0 = do
+        msMsg <- recvLimited conv
+        whenJust msMsg $ \ms -> do
+             case ms of
+                  MsgStart _ -> do
+                      send conv $ MsgNoBlock ("MsgStreamStart, expected MsgStreamUpdate")
+                      logDebug "handleStreamStart MsgStart, expected MsgStreamUpdate"
+                      return ()
+                  MsgUpdate u -> loop nodeId conv hashes (msuWindow u)
+    loop nodeId conv (hash:hashes) window = do
+        getBlock logic hash >>= \case
+            Just b -> do
+                send conv $ MsgBlock b
+                loop nodeId conv hashes (window - 1)
+            Nothing  -> do
+                send conv $ MsgNoBlock ("Couldn't retrieve block with hash " <> pretty hash)
+                failMalformed
+
+    -- See note above in the definition of handleGetBlocks [CSL-2148].
+    failMalformed =
+        throwM $ DBMalformed $
+        "handleStreamStart: getHashesRange returned header that doesn't " <>
+        "have corresponding block in storage."
+
+
 
 ----------------------------------------------------------------------------
 -- Header propagation
