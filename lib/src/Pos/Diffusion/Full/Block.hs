@@ -24,6 +24,7 @@ import qualified Data.Text.Buildable as B
 import           Data.Time.Units (toMicroseconds, fromMicroseconds)
 import           Formatting (bprint, build, int, sformat, shown, stext, (%))
 import qualified Network.Broadcast.OutboundQueue as OQ
+import           Mockable.Concurrent (async, wait)
 import           Serokell.Util.Text (listJson)
 import           System.Wlog (logDebug, logWarning)
 
@@ -292,13 +293,13 @@ streamBlocks
     -> d t
 streamBlocks _ enqueue nodeId tipHeader _ k = do
     blockChan <- atomically $ Conc.newTBQueue $ fromIntegral windowSize
-    requestBlocks blockChan (OldestFirst (one tipHeader))
-    k blockChan
+    -- XXX Is this the third or forth thread needed to read and write to a socket?
+    threadId <- async (requestBlocks blockChan (OldestFirst (one tipHeader)))
+    x <- k blockChan
+    _ <- wait threadId
+    return x
   where
 
-    -- | Make message which requests chain of blocks which is based on our
-    -- tip. LcaChild is the first block after LCA we don't
-    -- know. WantedBlock is the newest one we want to get.
     mkStreamStart :: HeaderHash -> HeaderHash -> MsgStream
     mkStreamStart lcaChild wantedBlock =
         MsgStart $ MsgStreamStart
@@ -346,10 +347,10 @@ streamBlocks _ enqueue nodeId tipHeader _ k = do
     retrieveBlocks blockChan conv window = do
         window' <- if window < windowSize `div` 2
                           then do
-                              let w' = window + windowSize
+                              let w' = windowSize
                               logDebug $ sformat ("Updating Window: "%int%" to "%int) window w'
                               send conv $ MsgUpdate $ MsgStreamUpdate $ w'
-                              return w'
+                              return (w' - 1)
                     else return $ window - 1
         block <- retrieveBlock conv
         atomically $ Conc.writeTBQueue blockChan (StreamBlock block)
