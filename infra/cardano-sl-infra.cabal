@@ -41,7 +41,6 @@ library
                         Pos.Slotting.Class
                         Pos.Slotting.Configuration
                         Pos.Slotting.Impl
-                        Pos.Slotting.Impl.Ntp
                         Pos.Slotting.Impl.Simple
                         Pos.Slotting.Impl.Util
                         Pos.Slotting.MemState
