@@ -7687,17 +7687,18 @@ inherit (pkgs) mesa;};
          , cardano-sl-client, cardano-sl-core, cardano-sl-crypto
          , cardano-sl-db, cardano-sl-delegation, cardano-sl-infra
          , cardano-sl-networking, cardano-sl-ssc, cardano-sl-txp
-         , cardano-sl-update, cardano-sl-util, cardano-sl-wallet
+         , cardano-sl-update, cardano-sl-util, cardano-sl-wallet, connection
          , constraints, containers, data-default, ether, exceptions
          , formatting, generics-sop, hspec, http-api-data, http-client
-         , http-types, insert-ordered-containers, ixset-typed, json-sop
-         , lens, log-warper, memory, mtl, neat-interpolation, network-uri
-         , optparse-applicative, QuickCheck, quickcheck-instances
-         , safe-exceptions, serokell-util, servant, servant-client
-         , servant-quickcheck, servant-server, servant-swagger, stdenv, stm
-         , string-conv, swagger2, template-haskell, text, text-format, time
-         , time-units, transformers, universum, unordered-containers, vector
-         , wai, wai-cors, wai-extra, warp
+         , http-client-tls, http-types, insert-ordered-containers
+         , ixset-typed, json-sop, lens, log-warper, memory, mtl
+         , neat-interpolation, network-uri, optparse-applicative, QuickCheck
+         , quickcheck-instances, safe-exceptions, serokell-util, servant
+         , servant-client, servant-client-core, servant-quickcheck
+         , servant-server, servant-swagger, stdenv, stm, string-conv
+         , swagger2, template-haskell, text, text-format, time, time-units
+         , tls, transformers, universum, unordered-containers, vector, wai
+         , wai-cors, wai-extra, warp
          }:
          mkDerivation {
            pname = "cardano-sl-wallet-new";
@@ -7710,12 +7711,13 @@ inherit (pkgs) mesa;};
              cardano-sl-client cardano-sl-core cardano-sl-crypto cardano-sl-db
              cardano-sl-infra cardano-sl-networking cardano-sl-ssc
              cardano-sl-txp cardano-sl-update cardano-sl-util cardano-sl-wallet
-             containers data-default exceptions formatting generics-sop
-             http-api-data http-client http-types ixset-typed json-sop lens
-             log-warper memory mtl network-uri QuickCheck safe-exceptions
-             serokell-util servant servant-client servant-quickcheck
-             servant-server string-conv template-haskell text text-format time
-             transformers universum unordered-containers vector wai warp
+             connection containers data-default exceptions formatting
+             generics-sop http-api-data http-client http-client-tls http-types
+             ixset-typed json-sop lens log-warper memory mtl network-uri
+             QuickCheck safe-exceptions serokell-util servant servant-client
+             servant-client-core servant-quickcheck servant-server string-conv
+             template-haskell text text-format time tls transformers universum
+             unordered-containers vector wai warp
            ];
            executableHaskellDepends = [
              aeson aeson-pretty base bytestring cardano-sl cardano-sl-client
