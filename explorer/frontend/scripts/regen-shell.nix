@@ -1,6 +1,10 @@
-# args@{...}: (import ./default.nix (args // { cardano-sl-explorer = null; })).shell
-
-{ pkgs ? import <nixpkgs> {} }:
+let
+  localLib = import ../../../lib.nix;
+in
+{ system ? builtins.currentSystem
+, config ? {}
+, pkgs ? (import (localLib.fetchNixPkgs) { inherit system config; })
+}:
 
 let 
   ghc = pkgs.haskellPackages.ghcWithPackages (ps: [ps.turtle ps.hnix]);
