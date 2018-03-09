@@ -15,7 +15,14 @@ import System.IO (openFile, hClose, IOMode(WriteMode))
 import Filesystem.Path.CurrentOS (encodeString)
 
 main :: IO ()
-main = sh $ do
+main = do
+  testMode <- options "Regenerate frontend dependencies" optionsParser
+  sh $ if testMode
+    then test
+    else regen
+
+regen :: Shell ()
+regen = do
   echo "Regenerating nix for frontend"
   bower2nix "bower.json" "bower-generated.nix"
   node2nix "package.json" "node-packages.nix"
@@ -36,6 +43,18 @@ node2nix src out = cachedShell src out $ \out' -> do
   inplace uglify2 out'
   inplace srcAttr out'
   inplace addSrcArg composition
+
+test :: Shell ()
+test = do
+  echo "Checking that auto-generated frontend dependencies nix is up to date."
+  b <- needsChange "bower.json" "bower-generated.nix"
+  n <- needsChange "package.json" "node-packages.nix"
+  when b $ echo " - bower-generated.nix needs update"
+  when n $ echo " - node-packages.nix needs update"
+  when (b || n) $ die "Run explorer/frontend/scripts/regen.hs to fix this"
+
+optionsParser :: Parser Bool
+optionsParser = switch "test" 't' "Test freshness but don't regenerate"
 
 ----------------------------------------------------------------------------
 
