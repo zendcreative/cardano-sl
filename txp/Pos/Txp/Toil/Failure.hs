@@ -16,7 +16,8 @@ import           GHC.TypeLits (TypeError)
 import           Serokell.Data.Memory.Units (Byte, memory)
 import           Serokell.Util (listJson)
 
-import           Pos.Core (Address, HeaderHash, ScriptVersion, TxFeePolicy, addressDetailedF)
+import           Pos.Core (Address, HeaderHash, ScriptVersion, TxFeePolicy, addressF, 
+                           addressDetailedF)
 import           Pos.Core.Txp (TxIn, TxInWitness, TxOut (..))
 import           Pos.Data.Attributes (UnparsedFields)
 import           Pos.Script (PlutusError)
