@@ -2,7 +2,8 @@
 
 module ProcessKiller
         ( stopProcess,
-          killProcess
+          killProcess,
+          shellReturnHandle
         ) where
 
 import System.Process
@@ -24,16 +25,22 @@ stopProcess ph = do
   pid <- getPid ph
   stop <- case pid of
     Nothing -> print "wtf"
-    Just pD -> generateConsoleCtrlEvent cTRL_C_EVENT pD
+    Just pD -> do
+      putStrLn "Stop me, oh, stop me"
+      generateConsoleCtrlEvent cTRL_C_EVENT pD
 
 killProcess :: ProcessHandle -> IO ()
-killProcess ph = terminateProcess
+killProcess ph = do
+  putStrLn "Murder most foul, as in the best it is, But this most foul, strange, and unnatural."
+  terminateProcess ph
 
 
 #else
 
 stopProcess :: ProcessHandle -> IO ()
-stopProcess = terminateProcess
+stopProcess ph = do
+  putStrLn "Stop me, oh, stop me"
+  terminateProcess ph
 
 killProcess :: ProcessHandle -> IO ()
 killProcess ph = do
@@ -41,7 +48,13 @@ killProcess ph = do
     case p_ of
       ClosedHandle _ -> return ()
       OpenHandle h -> do
+        putStrLn "Murder most foul, as in the best it is, But this most foul, strange, and unnatural."
         signalProcess sigKILL h
-        return ()
+        
 
 #endif
+
+shellReturnHandle :: String -> IO ProcessHandle
+shellReturnHandle cmd = do
+  (_, _, _, phandle) <- createProcess (shell cmd)
+  return phandle
