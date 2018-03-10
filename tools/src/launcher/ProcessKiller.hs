@@ -6,6 +6,7 @@ module ProcessKiller
           shellReturnHandle
         ) where
 
+import Control.Concurrent.MVar (readMVar)
 import System.Process
 import System.Process.Internals ( withProcessHandle
                                 , ProcessHandle__(..)
@@ -19,11 +20,25 @@ import System.Posix.Signals hiding (killProcess)
 #endif
 
 #ifdef mingw32_HOST_OS
+
+getPid :: ProcessHandle -> IO (Maybe Pid)
+getPid (ProcessHandle mh _ _) = do
+  p_ <- readMVar mh
+  case p_ of
+    OpenHandle h -> do
+        pid <- getProcessId h
+        return $ Just pid
+    _ -> return Nothing
+
 stopProcess :: ProcessHandle -> IO ()
 stopProcess ph = do
-  pid <- getProcessId ph
-  putStrLn "Stop me, oh, stop me"
-  generateConsoleCtrlEvent cTRL_C_EVENT pid
+  pid <- getPid ph
+  stop <- case pid of
+    Nothing -> print "wtf"
+    Just pD -> do
+      putStrLn "Stop me, oh, stop me"
+      generateConsoleCtrlEvent cTRL_C_EVENT pD
+  return ()
 
 killProcess :: ProcessHandle -> IO ()
 killProcess ph = do
